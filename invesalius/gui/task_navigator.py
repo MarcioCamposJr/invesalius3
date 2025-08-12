@@ -1871,6 +1871,8 @@ class ControlPanel(wx.Panel):
         self.GREEN_COLOR = GREEN_COLOR
         GREY_COLOR = (217, 217, 217)
         self.GREY_COLOR = GREY_COLOR
+        YELLOW_COLOR = const.YELLOW_COLOR_RGB
+        self.YELLOW_COLOR = YELLOW_COLOR
 
         # Toggle Button for Tractography
         tooltip = _("Control Tractography")
@@ -2057,6 +2059,23 @@ class ControlPanel(wx.Panel):
         )
         self.robot_free_drive_button = robot_free_drive_button
 
+        # Button for change active robot
+        tooltip = _("Change to another robot")
+        BMP_FREE_DRIVE = wx.Bitmap(
+            str(inv_paths.ICON_DIR.joinpath("robot_free_drive.png")), wx.BITMAP_TYPE_PNG
+        )
+        change_robot_button = wx.Button(self, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE)
+        change_robot_button.SetBackgroundColour(GREY_COLOR)
+        change_robot_button.SetBitmap(BMP_FREE_DRIVE)
+        change_robot_button.SetToolTip(tooltip)
+        # change_robot_button.SetValue(False)
+        change_robot_button.Enable(False)
+        change_robot_button.Bind(
+            wx.EVT_BUTTON,
+            partial(self.OnChangeRobotButton, ctrl=change_robot_button),
+        )
+        self.change_robot_button = change_robot_button
+
         # Toggle button for displaying TMS motor mapping on brain
         tooltip = _("Show TMS motor mapping on brain")
         BMP_MOTOR_MAP = wx.Bitmap(
@@ -2099,10 +2118,11 @@ class ControlPanel(wx.Panel):
             ]
         )
 
-        robot_buttons_sizer = wx.FlexGridSizer(2, 3, 5, 5)
+        robot_buttons_sizer = wx.FlexGridSizer(2, 4, 5, 5)
         robot_buttons_sizer.AddMany(
             [
                 (self.robot_name_lbl),
+                (wx.StaticText(self, -1, label="")),
                 (wx.StaticText(self, -1, label="")),
                 (wx.StaticText(self, -1, label="")),
             ]
@@ -2112,6 +2132,7 @@ class ControlPanel(wx.Panel):
                 (robot_track_target_button),
                 (robot_move_away_button),
                 (robot_free_drive_button),
+                (change_robot_button),
             ]
         )
 
@@ -2164,6 +2185,8 @@ class ControlPanel(wx.Panel):
         Publisher.subscribe(self.EnableRobotMoveAwayButton, "Enable move away button")
 
         Publisher.subscribe(self.EnableRobotFreeDriveButton, "Enable free drive button")
+
+        Publisher.subscribe(self.EnableChangeRobotButton, "Enable change robot button")
 
         Publisher.subscribe(self.ShowTargetButton, "Show target button")
         Publisher.subscribe(self.HideTargetButton, "Hide target button")
@@ -2218,6 +2241,18 @@ class ControlPanel(wx.Panel):
 
         ctrl.Enable(state)
         ctrl.SetBackgroundColour(self.GREY_COLOR)
+
+    def EnableButton(self, ctrl, state):
+        # Check if the button state is not changed, if so, return early. This is to prevent
+        # unnecessary updates to the button.
+        print(state)
+        print(ctrl.IsEnabled())
+        if ctrl.IsEnabled() == state:
+            ctrl.SetBackgroundColour(self.GREY_COLOR)
+            return
+
+        ctrl.Enable(state)
+        ctrl.SetBackgroundColour(self.YELLOW_COLOR)
 
     # Navigation
     def OnStartNavigation(self):
@@ -2581,6 +2616,13 @@ class ControlPanel(wx.Panel):
                 set=False,
                 robot_ID=self.robot.GetActive().robot_name,
             )
+
+    # 'Change Robot' button
+    def EnableChangeRobotButton(self, enabled=False):
+        self.EnableButton(self.change_robot_button, enabled)
+
+    def OnChangeRobotButton(self, evt=None, ctrl=None):
+        Publisher.sendMessage("Change to next robot")
 
     # TMS Motor Mapping related
     # 'Motor Map' button

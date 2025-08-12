@@ -280,7 +280,6 @@ class Robot:
         Publisher.sendMessage("Neuronavigation to Robot: Unset target", robot_ID=self.robot_name)
 
     def SetTarget(self, marker, robot_ID):
-
         if robot_ID != self.robot_name or not self.IsConnected():
             return
         coord = marker.position + marker.orientation
@@ -306,6 +305,10 @@ class Robots(metaclass=Singleton):
     def __bind_events(self):
         Publisher.subscribe(self.SendActive, "Send active robot")
         Publisher.subscribe(self.SetActiveByCoil, "Set active robot by coil name")
+        Publisher.subscribe(self.SetNextAsActive, "Change to next robot")
+        Publisher.subscribe(
+            self.CheckConnectedRobots, "Robot to Neuronavigation: Robot connection status"
+        )
 
     def GetRobot(self, name: str):
         return self.robots.get(name)
@@ -354,3 +357,20 @@ class Robots(metaclass=Singleton):
             Publisher.sendMessage("Update robot name label", label=robot.robot_name)
         else:
             print(f"No robot found with coil name '{coil_name}'.")
+
+    def SetNextAsActive(self):
+        robot_names = list(self.robots)
+        current_index = robot_names.index(self.active)
+        next_index = (current_index + 1) % len(robot_names)
+        self.active = robot_names[next_index]
+        print(f"Active robot: {self.active}")
+        Publisher.sendMessage("Update robot name label", label=self.active)
+
+    def CheckConnectedRobots(self, data, robot_ID):
+        connected_robots = [robot for robot in self.robots.values() if robot.IsConnected()]
+        print(f"Connected robots: {connected_robots}")
+        print(f"Number of connected robots {len(connected_robots)}")
+        if len(connected_robots) < 2:
+            Publisher.sendMessage("Enable change robot button", enabled=False)
+            return
+        Publisher.sendMessage("Enable change robot button", enabled=True)
