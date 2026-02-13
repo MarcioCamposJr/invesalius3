@@ -901,16 +901,10 @@ class SurfaceManager:
         dialog.running = False
 
     def on_publish_surface(self):
-        Publisher.sendMessage("Stop navigation")
+        # Publisher.sendMessage("Stop navigation")
         progress = dialogs.PublishingSurfacesProgressWindow()
-
-        def worker():
-            try:
-                self._publish_surfaces_worker(progress)
-            finally:
-                wx.CallAfter(progress.Close)
-
-        threading.Thread(target=worker, daemon=True).start()
+        self._publish_surfaces_worker(progress)
+        progress.Close()
 
     def _publish_surfaces_worker(self, progress):
         proj = prj.Project()
