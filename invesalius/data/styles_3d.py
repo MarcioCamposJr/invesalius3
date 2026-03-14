@@ -18,7 +18,7 @@
 # --------------------------------------------------------------------------
 
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, List, Literal, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -37,7 +37,7 @@ import invesalius.session as ses
 from invesalius.data.polygon_select import PolygonSelectCanvas
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import vtkarray_to_numpy
-from invesalius_cy.mask_cut import mask_cut
+from invesalius_rs import mask_cut
 
 PROP_MEASURE = 0.8
 
@@ -61,6 +61,15 @@ class Base3DInteractorStyle(vtkInteractorStyleTrackballCamera):
 
         self.AddObserver("MiddleButtonPressEvent", self.OnMiddleButtonPressEvent)
         self.AddObserver("MiddleButtonReleaseEvent", self.OnMiddleButtonReleaseEvent)
+
+        self.AddObserver("MouseMoveEvent", self.OnStatusbarMouseMove)
+        self.AddObserver("LeaveEvent", self.OnStatusbarLeave)
+
+    def OnStatusbarMouseMove(self, evt, obj):
+        Publisher.sendMessage("Update statusbar image info", info="Window: Volume")
+
+    def OnStatusbarLeave(self, evt, obj):
+        Publisher.sendMessage("Clear statusbar image info")
 
     def OnPressLeftButton(self, evt, obj):
         self.left_pressed = True
@@ -99,6 +108,8 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
         self.last_click_time = 0
         self.double_click_max_interval = 1.0  # in seconds
 
+        self.nav_status = False
+
         self.viewer = viewer
 
         self.picker = vtkCellPicker()
@@ -124,12 +135,24 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
         self.AddObserver("MouseWheelBackwardEvent", self.OnScrollBackward)
 
         self.AddObserver("MouseMoveEvent", self.OnMouseMove)
+        self.AddObserver("MiddleButtonReleaseEvent", self.OnMiddleRelease)
 
         # Set camera focus using left double-click.
         self.viewer.interactor.Bind(wx.EVT_LEFT_DCLICK, self.SetCameraFocus)
 
         # Reset camera using right double-click.
         self.viewer.interactor.Bind(wx.EVT_RIGHT_DCLICK, self.ResetCamera)
+
+        self.__bind_events()
+
+    def __bind_events(self):
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+
+    def OnNavigationStatus(self, nav_status, vis_status):
+        self.nav_status = nav_status
+
+    def OnMiddleRelease(self, evt, obj):
+        evt.EndPan()
 
     def OnMouseMove(self, evt, obj):
         if self.left_pressed:
@@ -145,10 +168,10 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
             evt.OnMiddleButtonDown()
 
     def OnRightClick(self, evt, obj):
-        self.viewer.interactor.InvokeEvent("StartSpinEvent")
+        evt.StartSpin()
 
     def OnRightRelease(self, evt, obj):
-        self.viewer.interactor.InvokeEvent("EndSpinEvent")
+        evt.EndSpin()
 
     def OnLeftClick(self, evt, obj):
         evt.StartRotate()
@@ -163,6 +186,8 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
         self.OnMouseWheelBackward()
 
     def PickMarker(self, evt, obj):
+        if self.nav_status:
+            return
         # Get the mouse position in the viewer.
         x, y = self.viewer.get_vtk_mouse_position()
 
@@ -184,6 +209,8 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
     def SetCameraFocus(self, evt):
         # If an actor was already found by PickMarker, use its center as the camera focus, otherwise
         # pick the actor under the mouse cursor, this time without hiding the surfaces.
+        if self.nav_status:
+            return
         if self.marker_found:
             actor = self.marker_found
         else:
@@ -210,6 +237,8 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
         self.viewer.interactor.GetRenderWindow().Render()
 
     def ResetCamera(self, evt):
+        if self.nav_status:
+            return
         renderer = self.viewer.ren
         interactor = self.viewer.interactor
 
@@ -445,6 +474,7 @@ class LinearMeasureInteractorStyle(DefaultInteractorStyle):
         super().__init__(viewer)
         self.viewer = viewer
         self.state_code = const.STATE_MEASURE_DISTANCE
+        self._type = const.LINEAR
         self.measure_picker = vtkPropPicker()
 
         proj = prj.Project()
@@ -470,7 +500,7 @@ class LinearMeasureInteractorStyle(DefaultInteractorStyle):
             Publisher.sendMessage(
                 "Add measurement point",
                 position=(x, y, z),
-                type=const.LINEAR,
+                type=self._type,
                 location=const.SURFACE,
                 radius=self._radius,
             )
@@ -558,6 +588,13 @@ class CrossInteractorStyle(DefaultInteractorStyle):
     def __init__(self, viewer):
         super().__init__(viewer)
         self.AddObserver("RightButtonPressEvent", self.UpdatePointer)
+        self.__bind_events()
+
+    def __bind_events(self):
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+
+    def OnNavigationStatus(self, nav_status, vis_status):
+        self.nav_status = nav_status
 
     def SetUp(self):
         self.viewer.CreatePointer()
@@ -567,6 +604,9 @@ class CrossInteractorStyle(DefaultInteractorStyle):
         self.viewer.DeletePointer()
 
     def UpdatePointer(self, obj, evt):
+        if self.nav_status:
+            return
+        self.viewer.CreatePointer()
         x, y = self.viewer.get_vtk_mouse_position()
 
         self.picker.Pick(x, y, 0, self.viewer.ren)
@@ -665,7 +705,9 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
     def __init__(self, viewer: "Viewer"):
         super().__init__(viewer)
 
-        self.mask_data = slc.Slice().current_mask.matrix.copy()
+        # mask_data is captured in SetUp() after the mask preview is enabled,
+        # so that do_threshold_to_all_slices() has already run.
+        self.mask_data = None
 
         self.m3e_list: list[PolygonSelectCanvas] = []
 
@@ -677,6 +719,11 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
 
         # keep track if we set preview here or not for UX
         self.has_set_mask_preview = False
+
+        # Initialise resolution from the current viewer widget size so that
+        # CutMaskFromPolygons always has a valid aspect ratio even before the
+        # first "Receive volume viewer size" message arrives (fixes #1086).
+        self.resolution: Tuple[int, int] = tuple(viewer.GetSize())
 
         self._bind_events()
         Publisher.subscribe(self.ClearPolygons, "M3E clear polygons")
@@ -707,13 +754,30 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
                 drawn_polygon.set_interactive(True)
                 self.m3e_list.append(drawn_polygon)
 
+        # Synchronize edit mode and depth value from the GUI's current state
+        import invesalius.pubsub as pub
+
+        pub.pub.sendMessage("M3E ask for edit mode")
+        pub.pub.sendMessage("M3E ask for depth value")
+
         if not ses.Session().mask_3d_preview:
             self.has_set_mask_preview = True
             Publisher.sendMessage("Enable mask 3D preview")
 
+        # Capture mask_data HERE, after Enable mask 3D preview has called
+        # do_threshold_to_all_slices().  Capturing it in __init__ was too early:
+        # the mask matrix was still all-zeros at that point, so every cut would
+        # restore to an empty mask.  Fixes #1086 (no-surface path).
+        self.mask_data = slc.Slice().current_mask.matrix.copy()
+
         Publisher.sendMessage(
             "Update viewer caption", viewer_name="Volume", caption="Volume - 3D mask editor"
         )
+
+        # If the mask preview was already active before entering this style,
+        # just trigger a re-render (camera was already positioned when preview was enabled).
+        if not self.has_set_mask_preview:
+            Publisher.sendMessage("Render volume viewer")
 
     def CleanUp(self):
         """Clean up is called when the interactor style is removed or changed.
@@ -723,9 +787,17 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
         super().CleanUp()
         self.viewer.canvas.unsubscribe_event("LeftButtonPressEvent", self.OnInsertPolygonPoint)
         self.viewer.canvas.unsubscribe_event("LeftButtonDoubleClickEvent", self.OnInsertPolygon)
-        for drawn_polygon in self.m3e_list:
-            drawn_polygon.visible = False
-            drawn_polygon.set_interactive(False)
+
+        # Issue #1078: When the 3D editor is disabled, polygons shouldn't just be hidden
+        # (which doesn't work properly due to CanvasHandlerBase), they should be fully removed.
+        # However, we cannot call self.ClearPolygons() because it also triggers
+        # self.OnRestoreInitMask() which reverts the cut! Instead, just remove the canvases:
+        self.viewer.canvas.draw_list = [
+            drawn_item
+            for drawn_item in self.viewer.canvas.draw_list
+            if not isinstance(drawn_item, PolygonSelectCanvas)
+        ]
+        self.m3e_list.clear()
 
         if self.has_set_mask_preview:
             Publisher.sendMessage("Disable mask 3D preview")
@@ -826,7 +898,7 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
         MV = vtkarray_to_numpy(MV)
         self.world_to_camera_coordinates = MV @ inv_Y_matrix
 
-    def ReceiveVolumeViewerSize(self, size: tuple[int, int]):
+    def ReceiveVolumeViewerSize(self, size: Tuple[int, int]):
         """Receive the size of the volume viewer through pubsub.
 
         Args:
@@ -840,12 +912,22 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
         _mat = self.mask_data[1:, 1:, 1:].copy()
         self.update_views(_mat)
 
-    def get_filters(self) -> list[npt.NDArray]:
+    def get_filters(self) -> List[npt.NDArray]:
         """Create a boolean mask filter based on the polygon points and viewer size."""
         w, h = self.resolution
-        # get the mask of the polygon in the shape of the screen resolution
+
+        # Get scale factor (necessary for Mac HighDPI displays where physical
+        # mouse coords are scaled by 2x but viewer resolution is logical w,h)
+        import wx
+
+        scale = wx.GetApp().GetTopWindow().GetContentScaleFactor()
+
+        # polygon2mask((w, h), points_as_xy): treats (x, y) as (row, col) in a (w, h) array.
+        # After the .T in CutMaskFromPolygons the result is (h, w) which the Rust code reads as
+        # shape (h, w) and indexes as mask[py][px] — correctly matching VTK screen coordinates.
         filters = [
-            polygon2mask((w, h), poly_canvas.polygon.points) for poly_canvas in self.m3e_list
+            polygon2mask((w, h), [(x / scale, y / scale) for x, y in poly_canvas.polygon.points])
+            for poly_canvas in self.m3e_list
         ]
         return filters
 
@@ -855,9 +937,21 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
         if len(completed_polygons) == 0:
             return
 
+        if self.mask_data is None:
+            return
+
         # All m3e will be updated with correct viewer settings
         Publisher.sendMessage("Send volume viewer size")
         Publisher.sendMessage("Send volume viewer active camera")
+
+        # Guard: if the viewer has not reported a valid size yet (e.g. on the
+        # very first Enable after a fresh DICOM import before the widget has
+        # been fully painted), skip the cut to avoid an incorrect projection
+        # matrix that would corrupt the mask.  The polygon stays in place so
+        # the user can re-apply once the viewer is ready.  Fixes #1086.
+        w, h = self.resolution
+        if h == 0:
+            return
 
         filters = self.get_filters()
 
@@ -869,41 +963,50 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
             np.logical_not(filter, out=filter)
 
         _mat = self.mask_data[1:, 1:, 1:].copy()
-        true_indices = np.where(_mat)
-
-        # Get coordinates of True voxels only
-        true_x_coords = true_indices[2].astype(np.int32)  # x coordinates
-        true_y_coords = true_indices[1].astype(np.int32)  # y coordinates
-        true_z_coords = true_indices[0].astype(np.int32)  # z coordinates
+        out = _mat.copy()
 
         slice = slc.Slice()
         sx, sy, sz = slice.spacing
 
-        near, far = self.clipping_range
+        try:
+            near, far = self.clipping_range
+        except AttributeError:
+            print("[DEBUG] self.clipping_range not set yet — skipping cut")
+            return
+
         depth = near + (far - near) * self.depth_val
+
+        try:
+            wts = self.world_to_screen
+            wtc = self.world_to_camera_coordinates
+        except AttributeError:
+            print("[DEBUG] self.world_to_screen not set yet — skipping cut")
+            return
+
         mask_cut(
             _mat,
-            true_x_coords,
-            true_y_coords,
-            true_z_coords,
             sx,
             sy,
             sz,
             depth,
             filter,
-            self.world_to_screen,
-            self.world_to_camera_coordinates,
-            _mat,
+            wts,
+            wtc,
+            out,
+            self.edit_mode,
         )
-        self.update_views(_mat)
+
+        self.update_views(out)
 
     def update_views(self, _mat: npt.NDArray):
         """Update the views with the given mask data."""
         slice = slc.Slice()
         _cur_mask = slice.current_mask
-        _cur_mask.matrix[1:, 1:, 1:] = _mat
-        _cur_mask.was_edited = True
-        _cur_mask.modified(all_volume=True)
+        if _cur_mask is not None:
+            _cur_mask.matrix[:] = 1
+            _cur_mask.matrix[1:, 1:, 1:] = _mat
+            _cur_mask.was_edited = True
+            _cur_mask.modified(all_volume=True)
 
         # Discard all buffers to reupdate view
         for ori in ["AXIAL", "CORONAL", "SAGITAL"]:
@@ -916,6 +1019,30 @@ class Mask3DEditorInteractorStyle(DefaultInteractorStyle):
         Publisher.sendMessage("Reload actual slice")
 
 
+class AnnotationInteractorStyle(LinearMeasureInteractorStyle):
+    """
+    Interactor style for placing annotations on 3D surfaces.
+    """
+
+    def __init__(self, viewer):
+        super().__init__(viewer)
+        self.state_code = const.STATE_MEASURE_ANNOTATION
+        self._type = const.ANNOTATION
+
+        self.AddObserver("MouseMoveEvent", self.OnMouseMove)
+
+    def OnMouseMove(self, obj, evt):
+        # We send the update message and let MeasurementManager decide if it's relevant.
+        # This avoiding crashing on missing Project attributes while in transition.
+        x, y = self.viewer.get_vtk_mouse_position()
+        self.measure_picker.Pick(x, y, 0, self.viewer.ren)
+        if self.measure_picker.GetActor():
+            pos = self.measure_picker.GetPickPosition()
+            Publisher.sendMessage("Update measurement point position", position=pos)
+
+        super().OnMouseMove(obj, evt)
+
+
 class Styles:
     styles = {
         const.STATE_DEFAULT: DefaultInteractorStyle,
@@ -926,6 +1053,7 @@ class Styles:
         const.STATE_WL: WWWLInteractorStyle,
         const.STATE_MEASURE_DISTANCE: LinearMeasureInteractorStyle,
         const.STATE_MEASURE_ANGLE: AngularMeasureInteractorStyle,
+        const.STATE_MEASURE_ANNOTATION: AnnotationInteractorStyle,
         const.VOLUME_STATE_SEED: SeedInteractorStyle,
         const.SLICE_STATE_CROSS: CrossInteractorStyle,
         const.STATE_NAVIGATION: NavigationInteractorStyle,

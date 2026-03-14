@@ -555,9 +555,49 @@ class Frame(wx.Frame):
             self._last_viewer_orientation_focus = orientation
 
     def CloseProject(self):
+        # The controller's ShowDialogCloseProject already handles the
+        # unsaved-changes dialog when project_status is NEW or CHANGED.
         Publisher.sendMessage("Close Project")
 
     def ExitDialog(self):
+        session = ses.Session()
+
+        # Check for unsaved changes
+        if session.HasUnsavedChanges():
+            msg = _("You have unsaved changes. What would you like to do?")
+            # Use RichMessageDialog so we can add a 'Store session' checkbox,
+            # consistent with the normal (no unsaved changes) exit dialog.
+            dialog = wx.RichMessageDialog(
+                None, msg, "InVesalius 3 - Unsaved Changes", wx.ICON_WARNING | wx.YES_NO | wx.CANCEL
+            )
+            dialog.SetYesNoLabels(_("Save and Exit"), _("Discard and Exit"))
+            dialog.ShowCheckBox(_("Store session"), False)
+
+            def on_close_unsaved(event):
+                dialog.EndModal(wx.ID_CANCEL)
+                event.Skip()
+
+            dialog.Bind(wx.EVT_CLOSE, on_close_unsaved)
+
+            answer = dialog.ShowModal()
+            store = dialog.IsCheckBoxChecked()
+            dialog.Destroy()
+
+            if answer == wx.ID_YES:
+                # Save and exit
+                Publisher.sendMessage("Show save dialog", save_as=session.temp_item)
+                wx.Yield()
+                log.invLogger.closeLogging()
+                return 2 if store else 1  # 2 = keep session, 1 = delete session
+            elif answer == wx.ID_NO:
+                # Discard and exit
+                log.invLogger.closeLogging()
+                return 2 if store else 1
+            else:
+                # Cancel - don't exit
+                return 0
+
+        # No unsaved changes, show normal exit dialog
         msg = _("Are you sure you want to exit?")
         dialog = wx.RichMessageDialog(
             None, msg, "Invesalius 3", wx.ICON_QUESTION | wx.YES_NO | wx.NO_DEFAULT
@@ -607,6 +647,13 @@ class Frame(wx.Frame):
 
             if status == 1:
                 Publisher.sendMessage("Exit session")
+            elif status == 2:
+                # "Store session" — keep state.json so the project is remembered,
+                # but mark it as intentional so the next launch doesn't treat it
+                # as a crash and show the recovery dialog.
+                import invesalius.session as ses
+
+                ses.Session().SetState("stored_session", True)
             self.Destroy()
 
     def OnMenuClick(self, evt):
@@ -721,6 +768,8 @@ class Frame(wx.Frame):
 
         elif id == const.ID_SEGMENTATION_BRAIN:
             self.OnBrainSegmentation()
+        elif id == const.ID_SEGMENTATION_SUBPART:
+            self.OnSubpartSegmentation()
         elif id == const.ID_SEGMENTATION_TRACHEA:
             self.OnTracheSegmentation()
         elif id == const.ID_SEGMENTATION_MANDIBLE_CT:
@@ -841,7 +890,6 @@ class Frame(wx.Frame):
             self.Reposition()
 
     def Reposition(self):
-        Publisher.sendMessage("ProgressBar Reposition")
         self.sizeChanged = False
 
     def OnMove(self, evt):
@@ -1071,6 +1119,25 @@ class Frame(wx.Frame):
             dlg.ShowModal()
             dlg.Destroy()
 
+    def OnSubpartSegmentation(self):
+        from invesalius.gui import deep_learning_seg_dialog
+
+        if deep_learning_seg_dialog.HAS_TORCH or deep_learning_seg_dialog.HAS_TINYGRAD:
+            dlg = deep_learning_seg_dialog.SubpartSegmenterDialog(self)
+            dlg.Show()
+        else:
+            dlg = wx.MessageDialog(
+                self,
+                _(
+                    "It's not possible to run subpart segmentation because your system doesn't have the following modules installed:"
+                )
+                + " Torch",
+                "InVesalius 3 - Brain subpart Segmentation",
+                wx.ICON_INFORMATION | wx.OK,
+            )
+            dlg.ShowModal()
+            dlg.Destroy()
+
     def OnTracheSegmentation(self):
         from invesalius.gui import deep_learning_seg_dialog
 
@@ -1287,6 +1354,7 @@ class MenuBar(wx.MenuBar):
             const.ID_THRESHOLD_SEGMENTATION,
             const.ID_FLOODFILL_SEGMENTATION,
             const.ID_SEGMENTATION_BRAIN,
+            const.ID_SEGMENTATION_SUBPART,
             const.ID_SEGMENTATION_TRACHEA,
             const.ID_SEGMENTATION_MANDIBLE_CT,
             const.ID_PLANNING_CRANIOPLASTY,
@@ -1460,6 +1528,9 @@ class MenuBar(wx.MenuBar):
         self.ffill_segmentation.Enable(False)
         segmentation_menu.AppendSeparator()
         segmentation_menu.Append(const.ID_SEGMENTATION_BRAIN, _("Brain segmentation (MRI T1)"))
+        segmentation_menu.Append(
+            const.ID_SEGMENTATION_SUBPART, _("Brain subpart segmentation (MRI T1)")
+        )
         segmentation_menu.Append(const.ID_SEGMENTATION_TRACHEA, _("Trachea segmentation (CT)"))
         segmentation_menu.Append(const.ID_SEGMENTATION_MANDIBLE_CT, _("Mandible segmentation (CT)"))
 
@@ -1500,9 +1571,7 @@ class MenuBar(wx.MenuBar):
         planning_menu.Append(const.ID_PLANNING_CRANIOPLASTY, _("Cranioplasty"))
 
         analysis_menu = wx.Menu()
-        mask_density_menu = analysis_menu.Append(
-            const.ID_MASK_DENSITY_MEASURE, _("Mask density measure")
-        )
+        analysis_menu.Append(const.ID_MASK_DENSITY_MEASURE, _("Mask density measure"))
 
         reorient_menu.Enable(False)
         tools_menu.Append(-1, _("Analysis"), analysis_menu)
@@ -1741,49 +1810,6 @@ class MenuBar(wx.MenuBar):
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
-
-
-class ProgressBar(wx.Gauge):
-    """
-    Progress bar / gauge.
-    """
-
-    def __init__(self, parent):
-        wx.Gauge.__init__(self, parent, -1, 100)
-        self.parent = parent
-        self._Layout()
-
-        self.__bind_events()
-
-    def __bind_events(self):
-        """
-        Bind events related to pubsub.
-        """
-        sub = Publisher.subscribe
-        sub(self._Layout, "ProgressBar Reposition")
-
-    def _Layout(self):
-        """
-        Compute new size and position, according to parent resize
-        """
-        rect = self.Parent.GetFieldRect(2)
-        self.SetPosition((rect.x + 2, rect.y + 2))
-        self.SetSize((rect.width - 4, rect.height - 4))
-        self.Show()
-
-    def SetPercentage(self, value):
-        """
-        Set value [0;100] into gauge, moving "status" percentage.
-        """
-        self.SetValue(int(value))
-        if value >= 99:
-            self.SetValue(0)
-        self.Refresh()
-        self.Update()
-
-
-# ------------------------------------------------------------------
-# ------------------------------------------------------------------
 # ------------------------------------------------------------------
 
 
@@ -1796,48 +1822,58 @@ class StatusBar(wx.StatusBar):
         wx.StatusBar.__init__(self, parent, -1)
 
         # General status configurations
-        self.SetFieldsCount(3)
-        self.SetStatusWidths([-2, -2, -1])
+        self.SetFieldsCount(1)
         self.SetStatusText(_("Ready"), 0)
-        self.SetStatusText("", 1)
-        self.SetStatusText("", 2)
 
-        # Add gaugee
-        self.progress_bar = ProgressBar(self)
+        # Right-aligned label for image info
+        self.image_info_label = wx.StaticText(self, -1, "")
+        self.Bind(wx.EVT_SIZE, self._OnSize)
 
         self.__bind_events()
+
+    def _OnSize(self, evt):
+        evt.Skip()
+        self._RepositionImageInfo()
+
+    def _RepositionImageInfo(self):
+        rect = self.GetFieldRect(0)
+        label_width, label_height = self.image_info_label.GetTextExtent(
+            self.image_info_label.GetLabel()
+        )
+        if label_width == 0:
+            return
+        label_height = self.image_info_label.GetSize()[1]
+        x = rect.x + rect.width - label_width - 10
+        y = rect.y + (rect.height - label_height) // 2
+        self.image_info_label.SetPosition((x, y))
 
     def __bind_events(self):
         """
         Bind events related to pubsub.
         """
         sub = Publisher.subscribe
-        sub(self._SetProgressValue, "Update status in GUI")
         sub(self._SetProgressLabel, "Update status text in GUI")
-
-    def _SetProgressValue(self, value, label):
-        """
-        Set both percentage value in gauge and text progress label in
-        status.
-        """
-        self.progress_bar.SetPercentage(value)
-        self.SetStatusText(label, 0)
-        if int(value) >= 99:
-            self.SetStatusText("", 0)
-        if sys.platform == "win32":
-            # TODO: temporary fix necessary in the Windows XP 64 Bits
-            # BUG in wxWidgets http://trac.wxwidgets.org/ticket/10896
-            try:
-                # wx.SafeYield()
-                wx.Yield()
-            except wx.PyAssertionError:
-                utils.debug("wx._core.PyAssertionError")
+        sub(self._SetImageInfo, "Update statusbar image info")
+        sub(self._ClearImageInfo, "Clear statusbar image info")
 
     def _SetProgressLabel(self, label):
         """
         Set text progress label.
         """
         self.SetStatusText(label, 0)
+
+    def _SetImageInfo(self, info):
+        """
+        Update image information in the statusbar.
+        """
+        self.image_info_label.SetLabel(info)
+        self._RepositionImageInfo()
+
+    def _ClearImageInfo(self):
+        """
+        Clear image information in the statusbar.
+        """
+        self.image_info_label.SetLabel("")
 
 
 # ------------------------------------------------------------------
@@ -2039,6 +2075,7 @@ class ObjectToolBar(AuiToolBar):
             const.STATE_MEASURE_ANGLE,
             const.STATE_MEASURE_DENSITY_ELLIPSE,
             const.STATE_MEASURE_DENSITY_POLYGON,
+            const.STATE_MEASURE_ANNOTATION,
             # const.STATE_ANNOTATE
         ]
         self.__init_items()
@@ -2097,6 +2134,9 @@ class ObjectToolBar(AuiToolBar):
 
         path = os.path.join(d, "measure_density_polygon32px.png")
         BMP_POLYGON = wx.Bitmap(str(path), wx.BITMAP_TYPE_PNG)
+
+        path = os.path.join(d, "tool_annotation_original.png")
+        BMP_ANNOTATION = wx.Bitmap(str(path), wx.BITMAP_TYPE_PNG)
 
         # Create tool items based on bitmaps
         self.AddTool(
@@ -2173,6 +2213,15 @@ class ObjectToolBar(AuiToolBar):
             short_help_string=_("Measure density polygon"),
             kind=wx.ITEM_CHECK,
         )
+
+        self.AddTool(
+            const.STATE_MEASURE_ANNOTATION,
+            "",
+            BMP_ANNOTATION,
+            wx.NullBitmap,
+            short_help_string=_("Add annotation"),
+            kind=wx.ITEM_CHECK,
+        )
         # self.AddLabelTool(const.STATE_ANNOTATE,
         #                "",
         #                shortHelp = _("Add annotation"),
@@ -2235,7 +2284,11 @@ class ObjectToolBar(AuiToolBar):
         """
         id = evt.GetId()
         state = self.GetToolToggled(id)
-        if state and ((id == const.STATE_MEASURE_DISTANCE) or (id == const.STATE_MEASURE_ANGLE)):
+        if state and (
+            (id == const.STATE_MEASURE_DISTANCE)
+            or (id == const.STATE_MEASURE_ANGLE)
+            or (id == const.STATE_MEASURE_ANNOTATION)
+        ):
             Publisher.sendMessage("Fold measure task")
 
         if state:

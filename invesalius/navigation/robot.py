@@ -65,6 +65,7 @@ class Robot:
         self.matrix_tracker_to_robot = None
         self.robot_coregistration_dialog = None
         self.target = None
+        self.robot_init_config = None
 
         self.objective = RobotObjective.NONE
         self.target = None
@@ -82,6 +83,15 @@ class Robot:
         self.__bind_events()
 
     def __bind_events(self):
+        Publisher.subscribe(
+            self.AbortRobotConfiguration, "Robot to Neuronavigation: Close robot dialog"
+        )
+        Publisher.subscribe(
+            self.OnRobotConnectionStatus, "Robot to Neuronavigation: Robot connection status"
+        )
+        Publisher.subscribe(self.SetObjectiveByRobot, "Robot to Neuronavigation: Set objective")
+        Publisher.subscribe(self.OnRobotInitialConfig, "Robot to Neuronavigation: Initial config")
+
         Publisher.subscribe(self.SetTarget, "Set target")
         Publisher.subscribe(self.UnsetTarget, "Unset target")
 
@@ -168,6 +178,9 @@ class Robot:
             wx.MessageBox(_("Unable to connect to the robot."), _("InVesalius 3"))
             return
 
+        if not self.tracker.tracker_connected:
+            wx.MessageBox(_("Tracker is not connect."), _("InVesalius 3"))
+            return
         self.robot_coregistration_dialog = dlg.RobotCoregistrationDialog(
             robot=self, tracker=self.tracker
         )
@@ -208,6 +221,10 @@ class Robot:
             "Neuronavigation to Robot: Connect to robot",
             robot_IP=self.robot_ip,
             robot_ID=self.robot_name,
+        )
+        pressure_setpoint = ses.Session().GetConfig("pressure_setpoint", 5.0)
+        Publisher.sendMessage(
+            "Neuronavigation to Robot: Pressure set point", pressure=pressure_setpoint, robot_ID=self.robot_name
         )
         print("Connected to robot")
 
@@ -304,6 +321,11 @@ class Robot:
         )
 
         Publisher.sendMessage(
+            "From Neuronavigation: Send target",
+            target=target,
+        )
+
+        Publisher.sendMessage(
             "Neuronavigation to Robot: Set target",
             target=m_target.tolist(),
             robot_ID=self.robot_name,
@@ -348,6 +370,9 @@ class Robot:
             Publisher.sendMessage("Press robot button", pressed=False, robot_ID=self.robot_name)
             Publisher.sendMessage("Press move away button", pressed=False, robot_ID=self.robot_name)
 
+    def OnRobotInitialConfig(self, config):
+        self.robot_init_config = config
+
     def UnsetTarget(self, marker, robot_ID):
         if robot_ID != self.robot_name:
             return
@@ -365,6 +390,9 @@ class Robot:
 
         self.target = coord
         self.SendTargetToRobot()
+
+    def SetPressureSetpoint(self, pressure):
+        Publisher.sendMessage("Neuronavigation to Robot: Pressure set point", pressure=pressure, robot_ID= self.robot_name)
 
 
 class Robots(metaclass=Singleton):

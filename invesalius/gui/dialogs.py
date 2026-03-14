@@ -568,6 +568,12 @@ def ShowSaveAsProjectDialog(default_filename: str) -> Tuple[Optional[str], bool]
     session = ses.Session()
     last_directory = session.GetConfig("last_directory_inv3", "")
 
+    # Never pre-fill with the temp backup directory: if the user recovered
+    # from a crash, last_directory may point inside the backup folder.
+    # Reset it so the dialog opens somewhere sensible instead.
+    if last_directory and "temp_backup" in str(last_directory):
+        last_directory = ""
+
     dlg = wx.FileDialog(
         None,
         _("Save project as..."),  # title
@@ -1193,6 +1199,44 @@ def ReportICPDistributionError() -> None:
         dlg = wx.MessageDialog(None, "", msg, wx.OK)
     else:
         dlg = wx.MessageDialog(None, msg, "InVesalius 3", wx.OK)
+    dlg.ShowModal()
+    dlg.Destroy()
+
+
+def WarnNonVisibleFaces(parent: wx.Window = None) -> None:
+    """
+    Warn user about non-visible faces in the surface.
+
+    Shows an informational OK-only warning dialog. Does not block ICP workflow.
+    """
+    msg = (
+        _("The selected surface contains inner structures.")
+        + "\n"
+        + _("For better ICP accuracy, it is recommended to perform")
+        + "\n"
+        + _("the refine registration using the scalp surface with only")
+        + "\n"
+        + _("the outer shell.")
+        + "\n\n"
+        + _("You can clean the surface using:")
+        + "\n"
+        + _("Tools \u2192 Surface \u2192 Remove Non-Visible Faces.")
+    )
+    if sys.platform == "darwin":
+        dlg = wx.MessageDialog(
+            parent,
+            "",
+            msg,
+            wx.OK | wx.ICON_WARNING,
+        )
+    else:
+        dlg = wx.MessageDialog(
+            parent,
+            msg,
+            "InVesalius 3 - Refine Coregistration",
+            wx.OK | wx.ICON_WARNING,
+        )
+
     dlg.ShowModal()
     dlg.Destroy()
 
@@ -4479,6 +4523,7 @@ class ICPCorregistrationDialog(wx.Dialog):
         self.actors_static_points = []
         self.point_coord = []
         self.actors_transformed_points = []
+        self._surface_validated = False
 
         self.obj_fiducials = np.full([5, 3], np.nan)
         self.obj_orients = np.full([5, 3], np.nan)
@@ -4524,6 +4569,7 @@ class ICPCorregistrationDialog(wx.Dialog):
         combo_surface_name.SetSelection(init_surface)
         self.surface = self.proj.surface_dict[init_surface].polydata
         self.LoadActor()
+        wx.CallAfter(self._validate_surface)
 
         tooltip = _("Choose the registration mode:")
         choice_icp_method = wx.ComboBox(
@@ -4799,6 +4845,20 @@ class ICPCorregistrationDialog(wx.Dialog):
 
         return np.sqrt(float(d))
 
+    def _validate_surface(self) -> None:
+        """Validate the selected surface for non-visible faces."""
+        if self._surface_validated:
+            return
+        try:
+            import invesalius.data.polydata_utils as pu
+
+            if pu.HasNonVisibleFaces(self.surface):
+                WarnNonVisibleFaces(parent=self)
+        except Exception:
+            pass
+        self._surface_validated = True
+        self.interactor.Render()
+
     def OnComboName(self, evt: wx.CommandEvent) -> None:
         # surface_name = evt.GetString()
         surface_index = evt.GetSelection()
@@ -4806,6 +4866,8 @@ class ICPCorregistrationDialog(wx.Dialog):
         if self.obj_actor:
             self.RemoveAllActors()
         self.LoadActor()
+        self._surface_validated = False
+        self._validate_surface()
 
     def OnChoiceICPMethod(self, evt: wx.CommandEvent) -> None:
         self.icp_mode = evt.GetSelection()
@@ -6132,7 +6194,8 @@ class TractographyProgressWindow:
         self.title = "InVesalius 3"
         self.msg = msg
         self.style = wx.PD_APP_MODAL | wx.PD_APP_MODAL | wx.PD_CAN_ABORT
-        self.dlg = wx.ProgressDialog(self.title, self.msg, parent=None, style=self.style)
+        parent = wx.GetApp().GetTopWindow() if wx.GetApp() else None
+        self.dlg = wx.ProgressDialog(self.title, self.msg, parent=parent, style=self.style)
         self.running = True
         self.error = None
         self.dlg.Show()
@@ -6197,7 +6260,8 @@ class SurfaceProgressWindow:
         self.title = "InVesalius 3"
         self.msg = _("Creating 3D surface ...")
         self.style = wx.PD_APP_MODAL | wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME
-        self.dlg = wx.ProgressDialog(self.title, self.msg, parent=None, style=self.style)
+        parent = wx.GetApp().GetTopWindow() if wx.GetApp() else None
+        self.dlg = wx.ProgressDialog(self.title, self.msg, parent=parent, style=self.style)
         self.running = True
         self.error = None
         self.dlg.Show()
@@ -6214,6 +6278,39 @@ class SurfaceProgressWindow:
 
     def Close(self) -> None:
         self.dlg.Destroy()
+
+
+class PublishingSurfacesProgressWindow:
+    def __init__(self, maximum=100):
+        title = "InVesalius 3"
+        message = _("Publishing surfaces to Dashboard...")
+        style = wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME
+
+        parent = wx.GetApp().GetTopWindow()
+
+        self.dlg = wx.ProgressDialog(
+            title,
+            message,
+            maximum=maximum,
+            parent=parent,
+            style=style,
+        )
+
+    def WasCancelled(self) -> bool:
+        return self.dlg.WasCancelled()
+
+    def Update(self, msg: str, value: int) -> None:
+        if not self.dlg:
+            return
+
+        if not self.dlg.WasCancelled():
+            self.dlg.Update(int(value), msg)
+            wx.Yield()
+
+    def Close(self) -> None:
+        if self.dlg:
+            self.dlg.Destroy()
+            self.dlg = None
 
 
 class GoToDialog(wx.Dialog):
@@ -6491,9 +6588,10 @@ class GoToDialogScannerCoord(wx.Dialog):
             ]
 
             # transformation from scanner coordinates to inv coord system
-            voxel = img_utils.convert_world_to_voxel(point[0:3], np.linalg.inv(slc.Slice().affine))[
-                0
-            ]
+            position_voxel = img_utils.convert_world_to_voxel(
+                point[0:3], np.linalg.inv(slc.Slice().affine)
+            )[0]
+            voxel = img_utils.convert_invesalius_to_voxel(position_voxel)
 
             Publisher.sendMessage(
                 "Update status text in GUI", label=_("Calculating the transformation ...")
@@ -7351,7 +7449,10 @@ class SetCOMPort(wx.Dialog):
         self.CenterOnParent()
 
     def GetCOMPort(self) -> str:
-        com_port = self.com_port_dropdown.GetString(self.com_port_dropdown.GetSelection())
+        com_port = self.com_port_dropdown.GetStringSelection()
+        if not com_port:
+            wx.MessageBox("Please select a COM port.", "No selection", wx.OK | wx.ICON_WARNING)
+            return
         return com_port
 
     def GetBaudRate(self) -> Optional[str]:
@@ -7767,6 +7868,14 @@ class ProgressBarHandler(wx.ProgressDialog):
 
         self.Bind(wx.EVT_CLOSE, self.close)
 
+        # Force the dialog to fully paint itself before the caller starts
+        # CPU-intensive work. Without this, slow window managers (e.g. GNOME
+        # Session Flashback on Linux) show a blank/broken dialog for several
+        # seconds. wx.SafeYield() processes all pending UI events (including
+        # paint) without re-entering user event handlers, so it is safe to
+        # call here on all platforms (macOS, Windows, Linux).
+        wx.SafeYield()
+
         # self.Show()
         self.__bind_events()
 
@@ -7790,7 +7899,7 @@ class ProgressBarHandler(wx.ProgressDialog):
                 value = self.max_value
             super().Update(int(value), msg)
 
-    def close(self) -> None:
+    def close(self, event=None) -> None:
         if self.IsShown():
             self.Destroy()
 
@@ -7800,3 +7909,47 @@ class ProgressBarHandler(wx.ProgressDialog):
             super().Pulse()
         else:
             super().Pulse(msg)
+
+
+class AnnotationDialog(wx.Dialog):
+    """Dialog for entering a annotation text."""
+
+    def __init__(self, parent=None, title=_("Add Annotation")):
+        if parent is None:
+            parent = wx.GetApp().GetTopWindow()
+        wx.Dialog.__init__(
+            self,
+            parent,
+            -1,
+            title,
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.FRAME_FLOAT_ON_PARENT,
+        )
+        self._init_gui()
+
+    def _init_gui(self):
+        label = wx.StaticText(self, -1, _("Annotation:"))
+        self.txt_annotation = wx.TextCtrl(self, -1, "", size=(300, 80), style=wx.TE_MULTILINE)
+
+        btn_ok = wx.Button(self, wx.ID_OK)
+        btn_ok.SetDefault()
+        btn_cancel = wx.Button(self, wx.ID_CANCEL)
+
+        btnsizer = wx.StdDialogButtonSizer()
+        btnsizer.AddButton(btn_ok)
+        btnsizer.AddButton(btn_cancel)
+        btnsizer.Realize()
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(label, 0, wx.ALL, 5)
+        sizer.Add(self.txt_annotation, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
+        sizer.Add(btnsizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.SetSizer(sizer)
+        sizer.Fit(self)
+        self.CenterOnParent()
+
+        self.txt_annotation.SetFocus()
+
+    def GetValue(self):
+        """Return the annotation text entered by the user."""
+        return self.txt_annotation.GetValue().strip()

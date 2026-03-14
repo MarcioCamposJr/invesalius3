@@ -30,6 +30,7 @@ except ImportError:
 
 import wx.lib.colourselect as csel
 import wx.lib.platebtn as pbtn
+from wx.lib import scrolledpanel as scrolled
 
 import invesalius.constants as const
 import invesalius.data.slice_ as slice_
@@ -73,9 +74,12 @@ class TaskPanel(wx.Panel):
         self.SetAutoLayout(1)
 
 
-class InnerTaskPanel(wx.Panel):
+class InnerTaskPanel(scrolled.ScrolledPanel):
     def __init__(self, parent):
-        wx.Panel.__init__(self, parent)
+        scrolled.ScrolledPanel.__init__(self, parent)
+        self.select_all_active = False
+        Publisher.subscribe(self.update_create_surface_button, "Update create surface button")
+
         backgroud_colour = wx.Colour(255, 255, 255)
         self.SetBackgroundColour(backgroud_colour)
         self.SetAutoLayout(1)
@@ -128,16 +132,16 @@ class InnerTaskPanel(wx.Panel):
         self.fold_panel = fold_panel
 
         # Button to fold to select region task
-        button_next = wx.Button(self, -1, _("Create surface"))
+        self.button_next = wx.Button(self, -1, _("Create surface"))
         check_box = wx.CheckBox(self, -1, _("Overwrite last surface"))
         self.check_box = check_box
         if sys.platform != "win32":
-            button_next.SetWindowVariant(wx.WINDOW_VARIANT_SMALL)
+            self.button_next.SetWindowVariant(wx.WINDOW_VARIANT_SMALL)
             check_box.SetWindowVariant(wx.WINDOW_VARIANT_SMALL)
-        button_next.Bind(wx.EVT_BUTTON, self.OnButtonNextTask)
+        self.button_next.Bind(wx.EVT_BUTTON, self.OnButtonNextTask)
 
         next_btn_sizer = wx.BoxSizer(wx.VERTICAL)
-        next_btn_sizer.Add(button_next, 1, wx.ALIGN_RIGHT)
+        next_btn_sizer.Add(self.button_next, 1, wx.ALIGN_RIGHT)
 
         line_sizer = wx.BoxSizer(wx.HORIZONTAL)
         line_sizer.Add(check_box, 0, wx.ALIGN_LEFT | wx.RIGHT | wx.LEFT, 5)
@@ -163,7 +167,53 @@ class InnerTaskPanel(wx.Panel):
         if id == BTN_NEW:
             self.OnLinkNewMask()
 
+    def update_create_surface_button(self, select_all_active):
+        """Update the create surface button text based on select all state"""
+        self.select_all_active = select_all_active
+
+        if select_all_active:
+            self.button_next.SetLabel("Create All Surfaces")
+            self.button_next.SetToolTip("Create surfaces for all selected masks")
+        else:
+            self.button_next.SetLabel("Create Surface")
+            self.button_next.SetToolTip("Create surface from selected mask")
+
+    def get_current_surface_parameters(self):
+        """Get current surface creation parameters from the UI"""
+        overwrite = self.check_box.IsChecked()
+        # a template that be used for each mask
+        return {
+            "method": {
+                "algorithm": "Default",
+                "options": {},
+            },
+            "options": {
+                "index": None,  # will be set for each mask
+                "name": "",  # will be set for each mask
+                "quality": _("Optimal *"),
+                "fill": False,
+                "keep_largest": False,
+                "overwrite": overwrite,
+            },
+        }
+
     def OnButtonNextTask(self, evt):
+        if self.select_all_active:
+            dlgs = dlg.SurfaceDialog()
+            if dlgs.ShowModal() == wx.ID_OK:
+                algorithm = dlgs.GetAlgorithmSelected()
+                options = dlgs.GetOptions()
+                surface_parameters_template = self.get_current_surface_parameters()
+                surface_parameters_template["method"]["algorithm"] = algorithm
+                surface_parameters_template["method"]["options"] = options
+
+                Publisher.sendMessage(
+                    "Create surfaces for all masks",
+                    surface_template=surface_parameters_template,
+                )
+            dlgs.Destroy()
+            return
+
         overwrite = self.check_box.IsChecked()
         algorithm = "Default"
         options = {}
@@ -189,10 +239,20 @@ class InnerTaskPanel(wx.Panel):
                 else:
                     return
 
+                mask_name = ""
+                if hasattr(self.fold_panel, "inner_panel") and hasattr(
+                    self.fold_panel.inner_panel, "mask_prop_panel"
+                ):
+                    mask_prop_panel = self.fold_panel.inner_panel.mask_prop_panel
+                    if hasattr(mask_prop_panel, "combo_mask_name"):
+                        mask_selection = mask_prop_panel.combo_mask_name.GetSelection()
+                        if mask_selection >= 0:
+                            mask_name = mask_prop_panel.combo_mask_name.GetString(mask_selection)
+
                 method = {"algorithm": algorithm, "options": options}
                 srf_options = {
                     "index": mask_index,
-                    "name": "",
+                    "name": mask_name,  # Use the mask name instead of empty string
                     "quality": _("Optimal *"),
                     "fill": False,
                     "keep_largest": False,
@@ -406,6 +466,8 @@ class InnerFoldPanel(wx.Panel):
 
     def ResizeFPB(self):
         sizeNeeded = self.fold_panel.GetPanelsLength(0, 0)[2]
+        if sys.platform != "win32":
+            sizeNeeded += const.FOLD_PANEL_EXTRA_HEIGHT
         self.fold_panel.SetMinSize((self.fold_panel.GetSize()[0], sizeNeeded))
         self.fold_panel.SetSize((self.fold_panel.GetSize()[0], sizeNeeded))
 
@@ -540,8 +602,17 @@ class MaskProperties(wx.Panel):
             self.combo_thresh.Delete(i)
 
     def OnRemoveMasks(self, mask_indexes):
-        for i in mask_indexes:
-            self.combo_mask_name.Delete(i)
+        self.combo_mask_name.Freeze()
+        try:
+            count = self.combo_mask_name.GetCount()
+            if len(mask_indexes) >= count:
+                self.combo_mask_name.Clear()
+            else:
+                for i in sorted(set(mask_indexes), reverse=True):
+                    if 0 <= i < self.combo_mask_name.GetCount():
+                        self.combo_mask_name.Delete(i)
+        finally:
+            self.combo_mask_name.Thaw()
 
         if self.combo_mask_name.IsEmpty():
             self.combo_mask_name.SetValue("")
@@ -836,6 +907,8 @@ class EditionTools(wx.Panel):
         Publisher.subscribe(self._set_brush_size, "Set edition brush size")
         Publisher.subscribe(self._set_threshold_range_gui, "Set edition threshold gui")
         Publisher.subscribe(self.ChangeMaskColour, "Set GUI items colour")
+        Publisher.subscribe(self.OnAskMaskEdit3DMode, "M3E ask for edit mode")
+        Publisher.subscribe(self.OnAskDepthMaskEdit3D, "M3E ask for depth value")
 
     def ChangeMaskColour(self, colour):
         self.gradient_thresh.SetColour(colour)
@@ -938,19 +1011,35 @@ class EditionTools(wx.Panel):
         if self.cbox_mask_edit_3d.GetValue():
             Publisher.sendMessage("Enable style", style=style_id)
             Publisher.sendMessage("M3E set depth value", value=spin_val)
+            # Enable Clear Polygons button only when Edit in 3D is active
+            self.btn_clear_3d_poly.Enable()
         else:
             Publisher.sendMessage("Disable style", style=style_id)
+            # Disable Clear Polygons button when Edit in 3D is inactive
+            # to prevent clearing mask edits when the tool is not active.
+            self.btn_clear_3d_poly.Disable()
 
     def OnComboMaskEdit3DMode(self, evt: wx.CommandEvent):
         op_id = evt.GetSelection()
+        Publisher.sendMessage("M3E set edit mode", mode=op_id)
+
+    def OnAskMaskEdit3DMode(self):
+        op_id = self.combo_mask_edit_3d_op.GetSelection()
         Publisher.sendMessage("M3E set edit mode", mode=op_id)
 
     def OnSpinDepthMaskEdit3D(self, _evt):
         spin_val = self.spin_mask_edit_3d_depth.GetValue()
         Publisher.sendMessage("M3E set depth value", value=spin_val)
 
+    def OnAskDepthMaskEdit3D(self):
+        spin_val = self.spin_mask_edit_3d_depth.GetValue()
+        Publisher.sendMessage("M3E set depth value", value=spin_val)
+
     def OnClearPolyMaskEdit3D(self, _evt):
-        Publisher.sendMessage("M3E clear polygons")
+        # Only clear polygons when Edit in 3D is active.
+        # Fixes #1079: the button was clearing edits even when unchecked.
+        if self.cbox_mask_edit_3d.GetValue():
+            Publisher.sendMessage("M3E clear polygons")
 
 
 class WatershedTool(EditionTools):

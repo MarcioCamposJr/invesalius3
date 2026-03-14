@@ -39,8 +39,11 @@ from vtkmodules.vtkCommonCore import (
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData, vtkTriangle
 from vtkmodules.vtkCommonTransforms import vtkTransform
 from vtkmodules.vtkFiltersCore import (
+    vtkCleanPolyData,
+    vtkDecimatePro,
     vtkMassProperties,
     vtkPolyDataNormals,
+    vtkSmoothPolyDataFilter,
     vtkStripper,
     vtkTriangleFilter,
 )
@@ -67,7 +70,6 @@ import invesalius.data.imagedata_utils as iu
 import invesalius.data.polydata_utils as pu
 import invesalius.data.slice_ as sl
 import invesalius.data.surface_process as surface_process
-import invesalius.data.vtk_utils as vtk_utils
 import invesalius.project as prj
 import invesalius.session as ses
 import invesalius.utils as utl
@@ -86,7 +88,7 @@ class Surface:
 
     general_index = -1
 
-    def __init__(self, index=None, name=""):
+    def __init__(self, index=None, name="", category="General"):
         Surface.general_index += 1
         if index is None:
             self.index = Surface.general_index
@@ -105,14 +107,15 @@ class Surface:
             self.name = name
 
         self.filename = None
+        self.category = category
 
     def SavePlist(self, dir_temp, filelist):
         if self.filename and os.path.exists(self.filename):
-            filename = "surface_%d" % self.index
+            filename = f"surface_{self.index}"
             vtp_filename = filename + ".vtp"
             vtp_filepath = self.filename
         else:
-            filename = "surface_%d" % self.index
+            filename = f"surface_{self.index}"
             vtp_filename = filename + ".vtp"
             vtp_fd, vtp_filepath = tempfile.mkstemp()
             pu.Export(self.polydata, vtp_filepath, bin=True)
@@ -130,6 +133,7 @@ class Surface:
             "visible": bool(self.is_shown),
             "volume": self.volume,
             "area": self.area,
+            "category": self.category,
         }
         plist_filename = filename + ".plist"
         # plist_filepath = os.path.join(dir_temp, filename + '.plist')
@@ -156,6 +160,10 @@ class Surface:
             self.area = sp["area"]
         except KeyError:
             self.area = 0.0
+        try:
+            self.category = sp["category"]
+        except KeyError:
+            self.category = "General"
         self.polydata = pu.Import(os.path.join(dirpath, sp["polydata"]))
         Surface.general_index = max(Surface.general_index, self.index)
 
@@ -236,6 +244,23 @@ class SurfaceManager:
         Publisher.subscribe(self.CreateSurfaceFromPolydata, "Create surface from polydata")
         Publisher.subscribe(self.export_all_surfaces_separately, "Export all surfaces separately")
 
+        Publisher.subscribe(self.on_surfaces_creation_completed, "Surfaces creation completed")
+
+        Publisher.subscribe(self.on_publish_surface, "Publish surface")
+
+    def on_surfaces_creation_completed(self, created_count):
+        """
+        Handle completion of batch surface creation
+        """
+        if created_count == 0:
+            wx.MessageBox("No valid masks", "No Surfaces Created", wx.OK | wx.ICON_WARNING)
+            return
+        wx.MessageBox(
+            f"Successfully created {created_count} surfaces.",
+            "Batch Surface Creation Complete",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+
     def OnDuplicate(self, surface_indexes):
         proj = prj.Project()
         surface_dict = proj.surface_dict
@@ -254,6 +279,7 @@ class SurfaceManager:
                 transparency=original_surface.transparency,
                 volume=original_surface.volume,
                 area=original_surface.area,
+                category=original_surface.category,
             )
 
     def OnRemove(self, surface_indexes):
@@ -499,7 +525,7 @@ class SurfaceManager:
         if surface_index_cortex is not None:
             self.convert_to_inv = convert_to_inv
             proj = prj.Project()
-            cortex_save_file = path_meshes + "export_inv/" + config_dict["cortex"]
+            cortex_save_file = path_meshes + config_dict["cortex"]
             polydata = proj.surface_dict[surface_index_cortex].polydata
             file_extension = cortex_save_file.split(".")[-1]
             if file_extension == "stl":
@@ -523,7 +549,7 @@ class SurfaceManager:
                 if surface_index_bmesh is not None:
                     if elements["file"] == "sc.stl":
                         scalp_index = surface_index_bmesh
-                    bmeshes_save_file = path_meshes + "export_inv/" + elements["file"]
+                    bmeshes_save_file = path_meshes + elements["file"]
                     polydata = proj.surface_dict[surface_index_bmesh].polydata
                     file_extension = bmeshes_save_file.split(".")[-1]
                     if file_extension == "stl":
@@ -628,6 +654,7 @@ class SurfaceManager:
         volume=None,
         area=None,
         scalar=False,
+        category="General",
     ):
         if self.convert_to_inv:
             polydata = self.ConvertPolydataToInv(polydata)
@@ -654,9 +681,9 @@ class SurfaceManager:
         if overwrite:
             if index is None:
                 index = self.last_surface_index
-            surface = Surface(index=index)
+            surface = Surface(index=index, name=name, category=category)
         else:
-            surface = Surface()
+            surface = Surface(name=name, category=category)
 
         if not colour:
             surface.colour = random.choice(const.SURFACE_COLOUR)
@@ -667,8 +694,8 @@ class SurfaceManager:
         if transparency:
             surface.transparency = transparency
 
-        if name:
-            surface.name = name
+        # if name:
+        #     surface.name = name
 
         # Append surface into Project.surface_dict
         proj = prj.Project()
@@ -790,7 +817,9 @@ class SurfaceManager:
     ####
     # (mask_index, surface_name, quality, fill_holes, keep_largest)
 
-    def _on_complete_surface_creation(self, args, overwrite, surface_name, colour, dialog):
+    def _on_complete_surface_creation(
+        self, args, overwrite, surface_name, colour, category, dialog
+    ):
         surface_filename, surface_measures = args
         wx.CallAfter(
             self._show_surface,
@@ -799,11 +828,12 @@ class SurfaceManager:
             overwrite,
             surface_name,
             colour,
+            category,
             dialog,
         )
 
     def _show_surface(
-        self, surface_filename, surface_measures, overwrite, surface_name, colour, dialog
+        self, surface_filename, surface_measures, overwrite, surface_name, colour, category, dialog
     ):
         print(surface_filename, surface_measures)
         reader = vtkXMLPolyDataReader()
@@ -825,9 +855,9 @@ class SurfaceManager:
         del mapper
         # Create Surface instance
         if overwrite:
-            surface = Surface(index=self.last_surface_index)
+            surface = Surface(index=self.last_surface_index, name=surface_name, category=category)
         else:
-            surface = Surface(name=surface_name)
+            surface = Surface(name=surface_name, category=category)
         surface.colour = colour
         surface.polydata = polydata
         surface.volume = surface_measures["volume"]
@@ -868,6 +898,126 @@ class SurfaceManager:
         Publisher.sendMessage("End busy cursor")
 
         dialog.running = False
+
+    def on_publish_surface(self):
+        Publisher.sendMessage("Stop navigation")
+        wx.Yield()
+        progress = dialogs.PublishingSurfacesProgressWindow(maximum=100)
+        self._publish_surfaces_worker(progress)
+        progress.Close()
+        Publisher.sendMessage("Start navigation")
+
+    def _publish_surfaces_worker(self, progress):
+        proj = prj.Project()
+        surface_dict = proj.surface_dict
+        total = len(surface_dict)
+
+        for i, key in enumerate(surface_dict):
+            if progress.WasCancelled():
+                break
+            surface = surface_dict[key]
+            percent = (i / total) * 100 if total else 100
+
+            progress.Update(f"Processing {surface.name}...", percent)
+            wx.Yield()  # allow UI to update
+
+            # Create new instance per surface
+            safe_polydata = vtkPolyData()
+            safe_polydata.DeepCopy(surface.polydata)
+
+            # Pass unique object
+            self.publish_surface(
+                safe_polydata, surface.name, surface.colour, surface.transparency, surface_index=key
+            )
+
+        wx.CallAfter(progress.Update, "Finishing...", 100)
+
+    def decimate_polydata(self, polydata, reduction=0.7):
+        """Reduce the number of triangles by `reduction` (0.5 = 50%)."""
+        if polydata.GetNumberOfPoints() == 0:
+            print("Input mesh empty, skipping.")
+            return polydata
+
+        # Step 1: Decimate to reduce complexity
+        decimator = vtkDecimatePro()
+        decimator.SetInputData(polydata)
+        decimator.SetTargetReduction(reduction)
+        decimator.PreserveTopologyOff()  # Consider disabling for aggressive reduction
+        decimator.Update()
+
+        output = decimator.GetOutput()
+        # SAFETY CHECK
+        if output.GetNumberOfPoints() == 0:
+            print("Decimation produced empty mesh. Returning original.")
+            return polydata
+
+        # Clean up any inconsistencies in mesh
+        cleaner = vtkCleanPolyData()
+        cleaner.SetInputData(decimator.GetOutput())
+        cleaner.Update()
+        cleaned = cleaner.GetOutput()
+        if cleaned.GetNumberOfPoints() == 0:
+            print("Cleaning produced empty mesh.")
+            return output
+
+        # Step 3: Smooth out the remaining vertices
+        smoother = vtkSmoothPolyDataFilter()
+        smoother.SetInputData(cleaner.GetOutput())
+        smoother.SetNumberOfIterations(15)  # Adjust based on visual fidelity needs
+        smoother.Update()
+
+        smoothed = smoother.GetOutput()
+        if smoothed.GetNumberOfPoints() == 0:
+            print("Smoothing produced empty mesh. Returning original.")
+            return cleaned
+
+        return smoothed
+
+    def publish_surface(
+        self,
+        polydata: vtkPolyData,
+        model_name: str,
+        colour: list,
+        transparency: float,
+        surface_index: int,
+    ):
+        """Export vtkPolyData to STL, compress, and send as base64."""
+        import base64
+
+        # 1. create temp file
+        fd, tmp_path = tempfile.mkstemp(suffix=".stl")
+        os.close(fd)  # VTK will write to this path
+
+        polydata_decimate = self.decimate_polydata(polydata)
+        # 2. write STL to temp file
+        writer = vtkSTLWriter()
+        writer.SetInputData(polydata_decimate)
+        writer.SetFileTypeToBinary()
+        writer.SetFileName(tmp_path)
+        writer.Write()
+
+        # 3. read bytes from temp file
+        with open(tmp_path, "rb") as f:
+            raw_bytes = f.read()
+
+        # 4. encode compressed bytes to base64
+        stl_b64 = base64.b64encode(raw_bytes).decode("ascii")
+
+        # 5. send via pubsub / socket
+        Publisher.sendMessage(
+            "Neuronavigation to Dashboard: Send surface",
+            model_name=model_name,
+            surface_index=surface_index,
+            stl_b64=stl_b64,
+            color=colour,
+            transparency=transparency,
+        )
+
+        # 6. clean up temp file
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     def _on_callback_error(self, e, dialog=None):
         dialog.running = False
@@ -910,6 +1060,7 @@ class SurfaceManager:
         mode = "CONTOUR"  # 'GRAYSCALE'
         min_value, max_value = mask.threshold_range
         colour = mask.colour[:3]
+        category = mask.category
 
         try:
             overwrite = surface_parameters["options"]["overwrite"]
@@ -1037,10 +1188,12 @@ class SurfaceManager:
             proj = prj.Project()
             # Create Surface instance
             if overwrite:
-                surface = Surface(index=self.last_surface_index)
+                surface = Surface(
+                    index=self.last_surface_index, name=surface_name, category=category
+                )
                 proj.ChangeSurface(surface)
             else:
-                surface = Surface(name=surface_name)
+                surface = Surface(name=surface_name, category=category)
                 index = proj.AddSurface(surface)
                 surface.index = index
                 self.last_surface_index = index
@@ -1112,6 +1265,7 @@ class SurfaceManager:
                         overwrite=overwrite,
                         surface_name=surface_name,
                         colour=colour,
+                        category=category,
                         dialog=sp,
                     ),
                     error_callback=functools.partial(self._on_callback_error, dialog=sp),

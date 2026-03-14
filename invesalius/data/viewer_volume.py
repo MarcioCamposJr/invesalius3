@@ -73,6 +73,7 @@ from vtkmodules.vtkIOImage import (
 from vtkmodules.vtkRenderingAnnotation import vtkAnnotatedCubeActor, vtkAxesActor
 from vtkmodules.vtkRenderingCore import (
     vtkActor,
+    vtkCompositePolyDataMapper,
     vtkPointPicker,
     vtkPolyDataMapper,
     vtkProperty,
@@ -80,7 +81,6 @@ from vtkmodules.vtkRenderingCore import (
     vtkRenderer,
     vtkWindowToImageFilter,
 )
-from vtkmodules.vtkRenderingOpenGL2 import vtkCompositePolyDataMapper2
 from vtkmodules.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteractor
 
 import invesalius.constants as const
@@ -499,6 +499,7 @@ class Viewer(wx.Panel):
         Publisher.subscribe(self.SaveEfieldData, "Save Efield data")
         Publisher.subscribe(self.SavedAllEfieldData, "Save all Efield data")
         Publisher.subscribe(self.SaveEfieldTargetData, "Save target data")
+        Publisher.subscribe(self.ClearSaveEfieldData, "Clear saved efield data")
         Publisher.subscribe(self.GetTargetSavedEfieldData, "Get target index efield")
         Publisher.subscribe(self.CheckStatusSavedEfieldData, "Check efield data")
         Publisher.subscribe(self.GetNeuronavigationApi, "Get Neuronavigation Api")
@@ -534,6 +535,8 @@ class Viewer(wx.Panel):
         Publisher.subscribe(
             self.EnableSaveAutomaticallyEfieldData, "Save automatically efield data"
         )
+        Publisher.subscribe(self.Getdiperdtforreport, "Get diperdt used in efield calculation")
+        Publisher.subscribe(self.Get_meshes_paths_to_report, "Get path meshes")
         Publisher.subscribe(self.UpdateSensorIDSize, "Update size sensors")
         Publisher.subscribe(self.UpdateDynamicBalls, "Update dynamic Balls")
         Publisher.subscribe(self.AddDynamicBalls, "Create dynamic Balls")
@@ -788,8 +791,8 @@ class Viewer(wx.Panel):
 
             # Add the actor to the renderer.
             self.ren.AddActor(actor)
-
-        self.UpdateRender()
+        if not self.nav_status:
+            self.UpdateRender()
 
     def DeletePointer(self):
         if self.pointer_actor:
@@ -1689,7 +1692,10 @@ class Viewer(wx.Panel):
             self.CreatePointer()
 
         # Hide the pointer during targeting, as it would cover the coil center donut
-        self.pointer_actor.SetVisibility(not self.target_mode)
+        if self.nav_status:
+            self.pointer_actor.SetVisibility(not self.target_mode)
+        else:
+            self.pointer_actor.SetVisibility(True)
 
         self.pointer_actor.SetPosition(position)
         # Update the render window manually, as it is not updated automatically when not navigating.
@@ -1955,25 +1961,38 @@ class Viewer(wx.Panel):
                 efield_coords_position = [list(position_world), list(orientation_world)]
             enorms_list = list(self.e_field_norms_to_save)
             if plot_efield_vectors:
-                e_field_vectors = list(self.max_efield_array)
+                if self.plot_no_connection:
+                    e_field_vectors = [
+                        [list(self.e_field_col1_to_save)],
+                        [list(self.e_field_col2_to_save)],
+                        [list(self.e_field_col3_to_save)],
+                    ]
+                else:
+                    e_field_vectors = list(self.max_efield_array)
                 self.target_radius_list.append(
                     [
                         target_list_index,
-                        self.Id_list,
-                        enorms_list,
-                        self.Idmax,
+                        self.coil_position_Trot,
                         self.coil_position,
                         efield_coords_position,
                         self.efield_coords,
-                        self.coil_position_Trot,
+                        enorms_list,
                         e_field_vectors,
+                        self.Id_list,
+                        self.Idmax,
                         self.focal_factor_members,
                         self.efield_threshold,
                         self.efield_ROISize,
                         self.mtms_coord,
+                        self.diperdt,
+                        self.ci,
+                        self.co,
+                        self.path_meshes,
+                        self.meshes_file,
+                        self.cortex_file,
+                        self.coil_model,
                     ]
                 )
-                self.mtms_coord = None
             else:
                 self.target_radius_list.append(
                     [
@@ -1987,6 +2006,9 @@ class Viewer(wx.Panel):
                         self.coil_position_Trot,
                     ]
                 )
+
+    def ClearSaveEfieldData(self):
+        self.target_radius_list.clear()
 
     def GetTargetSavedEfieldData(self, target_index_list):
         if len(self.target_radius_list) > 0:
@@ -2074,7 +2096,7 @@ class Viewer(wx.Panel):
     def InitializeColorArray(self):
         self.colors_init.SetNumberOfComponents(3)
         self.colors_init.SetName("Colors")
-        color = 3 * [const.CORTEX_COLOR]
+        color = const.CORTEX_COLOR
         for i in range(self.efield_mesh.GetNumberOfCells()):
             self.colors_init.InsertTuple(i, color)
 
@@ -2380,7 +2402,8 @@ class Viewer(wx.Panel):
         self.target_radius_list = []
         self.focal_factor_members = []
         self.distance_efield = None
-        self.mtms_coord = None
+        self.mtms_coord = []
+        # self.diperdt = None
 
         if self.max_efield_vector and self.ball_max_vector is not None:
             self.ren.RemoveActor(self.max_efield_vector)
@@ -2433,7 +2456,7 @@ class Viewer(wx.Panel):
             self.efield_lut = self.CreateLUTTableForEfield(0, self.efield_max)
             self.CalculateEdgesEfield()
             self.colors_init.SetNumberOfComponents(3)
-            self.colors_init.Fill(const.CORTEX_COLOR)
+            self.colors_init.Fill(const.CORTEX_COLOR[0])
             for h in range(len(self.Id_list)):
                 dcolor = 3 * [0.0]
                 index_id = self.Id_list[h]
@@ -2498,9 +2521,9 @@ class Viewer(wx.Panel):
         self.list_index_efield_vectors = list_index
 
     def GetCoilPosition(self, position, orientation):
-        m_img = tr.compose_matrix(angles=orientation, translate=position)
+        m_img = tr.compose_matrix(angles=np.radians(orientation), translate=position)
         m_img_flip = m_img.copy()
-        m_img_flip[1, -1] = -m_img_flip[1, -1]
+        # m_img_flip[1, -1] = -m_img_flip[1, -1]
         cp = m_img_flip[:-1, -1]  # coil center
         cp = cp * 0.001  # convert to meters
         cp = cp.tolist()
@@ -2538,6 +2561,10 @@ class Viewer(wx.Panel):
                     self.e_field_col2[max],
                     self.e_field_col3[max],
                 ]
+                self.e_field_norms_to_save = enorm_data[3][:, 0]
+                self.e_field_col1_to_save = enorm_data[3][:, 1]
+                self.e_field_col2_to_save = enorm_data[3][:, 2]
+                self.e_field_col3_to_save = enorm_data[3][:, 3]
             else:
                 self.e_field_norms_to_save = enorm_data[3].enorm
                 self.e_field_norms = enorm_data[3].enorm
@@ -2549,6 +2576,16 @@ class Viewer(wx.Panel):
                 self.e_field_col2_to_save = enorm_data[3].column2
                 self.e_field_col3_to_save = enorm_data[3].column3
                 if len(self.e_field_col1) > 1:
+                    K = len(self.e_field_norms_to_save)
+                    col1 = np.asarray(self.e_field_col1, dtype=float)
+                    col2 = np.asarray(self.e_field_col2, dtype=float)
+                    col3 = np.asarray(self.e_field_col3, dtype=float)
+                    N = col1.size // K
+                    if N > 1:
+                        self.e_field_col1 = col1.reshape(N, -1).sum(axis=0)
+                        self.e_field_col2 = col2.reshape(N, -1).sum(axis=0)
+                        self.e_field_col3 = col3.reshape(N, -1).sum(axis=0)
+
                     self.e_field_col1 = [self.e_field_col1[i] for i in self.Id_list]
                     self.e_field_col2 = [self.e_field_col2[i] for i in self.Id_list]
                     self.e_field_col3 = [self.e_field_col3[i] for i in self.Id_list]
@@ -2600,7 +2637,6 @@ class Viewer(wx.Panel):
         else:
             self.e_field_norms = enorm_data[3]
             self.Idmax = np.array(self.e_field_norms).argmax()
-
         self.GetEfieldMaxMin(self.e_field_norms)
 
     def SaveEfieldData(self, filename, plot_efield_vectors, marker_id):
@@ -2612,18 +2648,25 @@ class Viewer(wx.Panel):
 
         header = [
             "Marker ID",
-            "T_rot",
+            "Rotation matrix for coil coordinates",
             "Coil center",
             "Coil position in world coordinates",
             "InVesalius coordinates",
             "Enorm",
-            "ID cell max",
             "Efield vectors",
-            "Enorm cell indexes",
+            "Enorm cell indexes (ROI)",
+            "ID cell max",
             "Focal factors",
             "Efield threshold",
             "Efield ROI size",
-            "Mtms_coord",
+            "mTMS coordinates",
+            "diperdt",
+            "ci",
+            "co",
+            "path meshes",
+            "meshes file",
+            "cortex file",
+            "coil model file",
         ]
         if self.efield_coords is not None:
             position_world, orientation_world = imagedata_utils.convert_invesalius_to_world(
@@ -2648,17 +2691,23 @@ class Viewer(wx.Panel):
                     efield_coords_position,
                     self.efield_coords,
                     list(self.e_field_norms_to_save),
-                    self.Idmax,
                     e_field_vectors,
                     self.Id_list,
+                    self.Idmax,
                     self.focal_factor_members,
                     self.efield_threshold,
                     self.efield_ROISize,
                     self.mtms_coord,
+                    self.diperdt,
+                    self.ci,
+                    self.co,
+                    self.path_meshes,
+                    self.meshes_file,
+                    self.cortex_file,
+                    self.coil_model,
                 ]
             )
-            # REMOVE THIS
-            self.mtms_coord = None
+
         else:
             all_data.append(
                 [
@@ -2681,24 +2730,42 @@ class Viewer(wx.Panel):
 
         header = [
             "Marker ID",
-            "Enorm cell indexes",
-            "Enorm",
-            "ID cell Max",
+            "Rotation matrix for coil coordinates",
             "Coil center",
-            "Coil position world coordinates",
+            "Coil position in world coordinates",
             "InVesalius coordinates",
-            "T_rot",
+            "Enorm",
             "Efield vectors",
+            "Enorm cell indexes (ROI)",
+            "ID cell Max",
             "Focal factors",
             "Efield threshold",
             "Efield ROI size",
-            "Mtms_coord",
+            "mTMS coordinates",
+            "diperdt",
+            "ci",
+            "co",
+            "path meshes",
+            "meshes file",
+            "cortex file",
+            "coil model file",
         ]
         all_data = list(self.target_radius_list)
         with open(filename, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(header)
             writer.writerows(all_data)
+
+    def Getdiperdtforreport(self, diperdt, ci, co):
+        self.diperdt = diperdt
+        self.ci = ci
+        self.co = co
+
+    def Get_meshes_paths_to_report(self, path_meshes, cortex_file, meshes_file, coilmodel):
+        self.meshes_file = meshes_file
+        self.cortex_file = cortex_file
+        self.path_meshes = path_meshes
+        self.coil_model = coilmodel
 
     def GetCellIntersection(self, p1, p2, locator):
         # vtk_colors = vtkNamedColors()
@@ -2815,7 +2882,7 @@ class Viewer(wx.Panel):
             self.object_orientation_torus_actor = None
 
     def OnUpdateTracts(self, root=None, affine_vtk=None, coord_offset=None, coord_offset_w=None):
-        mapper = vtkCompositePolyDataMapper2()
+        mapper = vtkCompositePolyDataMapper()
         mapper.SetInputDataObject(root)
 
         self.actor_tracts = vtkActor()
@@ -3220,6 +3287,11 @@ class Viewer(wx.Panel):
         ):
             self.ren.ResetCamera()
             self.ren.ResetCameraClippingRange()
+            # Match the parallel projection used by AddSurface/LoadVolume so that
+            # GetCompositeProjectionTransformMatrix produces a correct world-to-screen
+            # matrix for the 3D mask editor (fixes #1086 – "Edit in 3D" without a
+            # surface generated first).
+            self.ren.GetActiveCamera().ParallelProjectionOn()
 
     def remove_mask_preview(self, mask_3d_actor):
         self.ren.RemoveVolume(mask_3d_actor)

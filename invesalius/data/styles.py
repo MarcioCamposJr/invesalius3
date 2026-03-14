@@ -59,11 +59,11 @@ import invesalius.data.watershed_process as watershed_process
 import invesalius.gui.dialogs as dialogs
 import invesalius.session as ses
 import invesalius.utils as utils
+import invesalius_rs as floodfill
 from invesalius.data.imagedata_utils import get_LUT_value, get_LUT_value_255
 from invesalius.data.measures import CircleDensityMeasure, MeasureData, PolygonDensityMeasure
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
-from invesalius_cy import floodfill
 
 # import invesalius.project as prj
 
@@ -104,6 +104,9 @@ class BaseImageInteractorStyle(vtkInteractorStyleImage):
         self.AddObserver("MiddleButtonPressEvent", self.OnMiddleButtonPressEvent)
         self.AddObserver("MiddleButtonReleaseEvent", self.OnMiddleButtonReleaseEvent)
 
+        self.AddObserver("MouseMoveEvent", self.OnStatusbarMouseMove)
+        self.AddObserver("LeaveEvent", self.OnStatusbarLeave)
+
     def OnPressLeftButton(self, evt, obj):
         self.left_pressed = True
 
@@ -122,6 +125,12 @@ class BaseImageInteractorStyle(vtkInteractorStyleImage):
 
     def OnMiddleButtonReleaseEvent(self, evt, obj):
         self.middle_pressed = False
+
+    def OnStatusbarMouseMove(self, evt, obj):
+        self.viewer.UpdateStatusbarInfo()
+
+    def OnStatusbarLeave(self, evt, obj):
+        Publisher.sendMessage("Clear statusbar image info")
 
     def GetMousePosition(self):
         mx, my = self.viewer.get_vtk_mouse_position()
@@ -820,10 +829,14 @@ class LinearMeasureInteractorStyle(DefaultInteractorStyle):
                     radius=self.radius,
                 )
 
-                n, (m, mr) = 1, self.measures.measures[self._ori][slice_number][-1]
-                self.creating = n, m, mr
-                self.viewer.UpdateCanvas()
-                self.viewer.scroll_enabled = False
+                try:
+                    n, (m, mr) = 1, self.measures.measures[self._ori][slice_number][-1]
+                    self.creating = n, m, mr
+                    self.viewer.UpdateCanvas()
+                    self.viewer.scroll_enabled = False
+                except IndexError:
+                    # Failsafe if MeasurementManager failed to append the measure point
+                    self.creating = None
 
     def OnReleaseMeasurePoint(self, obj, evt):
         if self.selected:
@@ -864,10 +877,11 @@ class LinearMeasureInteractorStyle(DefaultInteractorStyle):
 
     def OnLeaveMeasureInteractor(self, obj, evt):
         if self.creating or self.selected:
-            n, m, mr = self.creating
-            if not mr.IsComplete():
-                Publisher.sendMessage("Remove incomplete measurements")
-            self.creating = None
+            if self.creating:
+                n, m, mr = self.creating
+                if not mr.IsComplete():
+                    Publisher.sendMessage("Remove incomplete measurements")
+                self.creating = None
             self.selected = None
             self.viewer.UpdateCanvas()
             self.viewer.scroll_enabled = True
@@ -919,7 +933,31 @@ class AngularMeasureInteractorStyle(LinearMeasureInteractorStyle):
         LinearMeasureInteractorStyle.__init__(self, viewer)
         self._type = const.ANGULAR
 
-        self.state_code = const.STATE_MEASURE_ANGLE
+
+class AnnotationInteractorStyle(LinearMeasureInteractorStyle):
+    """
+    Interactor style for placing annotations.
+    """
+
+    def __init__(self, viewer):
+        LinearMeasureInteractorStyle.__init__(self, viewer)
+        self.state_code = const.STATE_MEASURE_ANNOTATION
+        self._type = const.ANNOTATION
+
+    def OnInsertMeasurePoint(self, obj, evt):
+        was_creating = self.creating is not None
+        super().OnInsertMeasurePoint(obj, evt)
+
+        # If it was creating, and now it's not, the rubber-banding finished (second click)
+        if was_creating and self.creating is None:
+            slice_number = self.slice_data.number
+            try:
+                m, mr = self.measures.measures[self._ori][slice_number][-1]
+                Publisher.sendMessage(
+                    "Show annotation dialog", m=m, mr=mr, location=ORIENTATIONS[self.orientation]
+                )
+            except (IndexError, KeyError):
+                pass
 
 
 class DensityMeasureStyle(DefaultInteractorStyle):
@@ -2407,9 +2445,10 @@ class FloodFillMaskInteractorStyle(DefaultInteractorStyle):
                 bstruct = np.zeros((3, 3, 1), dtype="uint8")
                 bstruct[:, :, 0] = _bstruct
 
+        print("FloodFillMaskInteractorStyle", self.t0, self.t1)
         if self.config.target == "2D":
-            floodfill.floodfill_threshold(
-                mask, [[x, y, z]], self.t0, self.t1, self.fill_value, bstruct, mask
+            floodfill.floodfill_threshold_inplace(
+                mask, ((x, y, z),), self.t0, self.t1, self.fill_value, bstruct
             )
             b_mask = self.viewer.slice_.buffer_slices[self.orientation].mask
             index = self.viewer.slice_.buffer_slices[self.orientation].index
@@ -2425,14 +2464,13 @@ class FloodFillMaskInteractorStyle(DefaultInteractorStyle):
         else:
             with futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
-                    floodfill.floodfill_threshold,
+                    floodfill.floodfill_threshold_inplace,
                     mask,
-                    [[x, y, z]],
+                    ((x, y, z),),
                     self.t0,
                     self.t1,
                     self.fill_value,
                     bstruct,
-                    mask,
                 )
 
                 dlg = wx.ProgressDialog(
@@ -2648,10 +2686,36 @@ class SelectMaskPartsInteractorStyle(DefaultInteractorStyle):
 
         if self.config.mask:
             if dialog_return == wx.OK:
+                # Capture old mask before selection changes, so we can hide its 3D preview
+                old_mask = self.viewer.slice_.current_mask
+
+                if ses.Session().mask_3d_preview:
+                    self.config.mask.imagedata = self.config.mask.as_vtkimagedata()
+                    self.config.mask.create_3d_preview()
+                    # Ensure final colour is set BEFORE any render (fixes color flash)
+                    self.config.mask.volume.set_colour(self.config.mask.colour)
+
                 self.config.mask.name = self.config.mask_name
-                self.viewer.slice_._add_mask_into_proj(self.config.mask)
+                # Avoid triggering an immediate "Show mask" (and thus a render) while adding:
+                self.viewer.slice_._add_mask_into_proj(self.config.mask, show=False)
                 self.viewer.slice_.SelectCurrentMask(self.config.mask.index)
                 Publisher.sendMessage("Change mask selected", index=self.config.mask.index)
+
+                if ses.Session().mask_3d_preview:
+                    # Load new actor FIRST, then remove old one — avoids black-flash frame
+                    Publisher.sendMessage(
+                        "Load mask preview", mask_3d_actor=self.config.mask.volume._actor, flag=True
+                    )
+                    # Safely detach the old mask's 3D preview from the renderer.
+                    # We do not destroy the volume data because the mask is still in the project.
+                    if old_mask is not None and old_mask.volume is not None:
+                        Publisher.sendMessage(
+                            "Remove mask preview", mask_3d_actor=old_mask.volume._actor
+                        )
+
+                # Now that actors are ready, trigger the final visibility and render
+                Publisher.sendMessage("Show mask", index=self.config.mask.index, value=True)
+                Publisher.sendMessage("Render volume viewer")
 
             del self.viewer.slice_.aux_matrices["SELECT"]
             self.viewer.slice_.to_show_aux = ""
@@ -2677,7 +2741,7 @@ class SelectMaskPartsInteractorStyle(DefaultInteractorStyle):
         if iren.GetControlKey():
             floodfill.floodfill_threshold(
                 self.config.mask.matrix[1:, 1:, 1:],
-                [[x, y, z]],
+                ((x, y, z),),
                 254,
                 255,
                 0,
@@ -2687,7 +2751,7 @@ class SelectMaskPartsInteractorStyle(DefaultInteractorStyle):
         else:
             floodfill.floodfill_threshold(
                 mask,
-                [[x, y, z]],
+                ((x, y, z),),
                 self.t0,
                 self.t1,
                 self.fill_value,
@@ -2700,6 +2764,16 @@ class SelectMaskPartsInteractorStyle(DefaultInteractorStyle):
 
         self.config.mask.was_edited = True
         Publisher.sendMessage("Reload actual slice")
+
+        # Bug 1 fix: also update the 3D Mask Preview to show selection in red
+        if ses.Session().mask_3d_preview:
+            self.config.mask.imagedata = self.config.mask.as_vtkimagedata()
+            self.config.mask.create_3d_preview()
+            self.config.mask.volume.set_colour((1.0, 0.0, 0.0))
+            Publisher.sendMessage(
+                "Load mask preview", mask_3d_actor=self.config.mask.volume._actor, flag=True
+            )
+            Publisher.sendMessage("Render volume viewer")
 
     def _create_new_mask(self):
         mask = self.viewer.slice_.create_new_mask(show=False, add_to_project=False)
@@ -2847,7 +2921,7 @@ class FloodFillSegmentInteractorStyle(DefaultInteractorStyle):
             )
             bstruct = bstruct.reshape((1, 3, 3))
 
-            floodfill.floodfill_threshold(image, [[x, y, 0]], t0, t1, 1, bstruct, out_mask)
+            floodfill.floodfill_threshold(image, ((x, y, 0),), t0, t1, 1, bstruct, out_mask)
 
         mask[out_mask.astype("bool")] = self.config.fill_value
 
@@ -2915,7 +2989,7 @@ class FloodFillSegmentInteractorStyle(DefaultInteractorStyle):
             out_mask = np.zeros_like(mask)
             with futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
-                    floodfill.floodfill_threshold, image, [[x, y, z]], t0, t1, 1, bstruct, out_mask
+                    floodfill.floodfill_threshold, image, ((x, y, z),), t0, t1, 1, bstruct, out_mask
                 )
 
                 self.config.dlg.panel_ffill_progress.Enable()
@@ -2960,7 +3034,7 @@ class FloodFillSegmentInteractorStyle(DefaultInteractorStyle):
             t0 = mean - var * self.config.confid_mult
             t1 = mean + var * self.config.confid_mult
 
-            floodfill.floodfill_threshold(image, [[x, y, z]], t0, t1, 1, bstruct, out_mask)
+            floodfill.floodfill_threshold(image, ((x, y, z),), t0, t1, 1, bstruct, out_mask)
 
             bool_mask[out_mask == 1] = True
 
@@ -2979,6 +3053,7 @@ class Styles:
         const.STATE_MEASURE_ANGLE: AngularMeasureInteractorStyle,
         const.STATE_MEASURE_DENSITY_ELLIPSE: DensityMeasureEllipseStyle,
         const.STATE_MEASURE_DENSITY_POLYGON: DensityMeasurePolygonStyle,
+        const.STATE_MEASURE_ANNOTATION: AnnotationInteractorStyle,
         const.STATE_NAVIGATION: NavigationInteractorStyle,
         const.STATE_PAN: PanMoveInteractorStyle,
         const.STATE_SPIN: SpinInteractorStyle,

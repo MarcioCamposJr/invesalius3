@@ -10,33 +10,39 @@ keywords = [
   "neuronavigation",
 ]
 dependencies = [
-    "cython==3.0.10",
     "h5py==3.11.0",
     "imageio==2.34.2",
     "matplotlib==3.9.0",
     "nibabel==5.2.1",
     "numpy==1.26.4",
     "onnx>=1.17.0",
-    "optitrack ; python_full_version == '3.8.*' and sys_platform == 'windows'",
+    "onnxruntime-gpu==1.23.0 ; sys_platform == 'win32' or sys_platform == 'linux'",
+    "onnxruntime ; sys_platform == 'darwin'",
+    "optitrack ; python_full_version == '3.8.*' and sys_platform == 'win32'",
+    "pandas>=2.3.3",
     "pillow==10.3.0",
     "psutil==6.0.0",
+    "polhemus==0.0.3; sys_platform == 'win32'",
+    "polhemusFT==0.0.3; sys_platform == 'win32'",
     "pyacvd==0.2.11",
-    "pyclaron ; python_full_version == '3.8.*' and sys_platform == 'windows'",
+    "pyclaron ; python_full_version == '3.8.*' and sys_platform == 'win32'",
     "pypolaris>=0.0.8",
     "pypubsub==4.0.3",
+    "pypolaris==0.0.8; sys_platform == 'win32'",
     "pyserial==3.5",
-    "python-gdcm",
+    "python-gdcm~=3.0.24",
     "requests>=2.32.3",
     "scikit-image==0.24.0",
     "scipy==1.14.0",
-    "setuptools-scm",
+    "setuptools>=65,<68", # Constrained to <68 for wxPython 4.2.2 compatibility (copy_file signature issue) 
+    "setuptools-scm<8",
     "tinygrad==0.10.2",
     "torch>=2.3.1",
     "vtk==9.3.0",
     "wxpython==4.2.2",
 ]
 license = { file = "LICENSE.txt" }
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 
 
@@ -53,7 +59,7 @@ dev = [
     "ruff~=0.5.0",
     "scikit-learn==1.5.0",
     "uvicorn[standard]==0.30.1",
-    "scikit-build-core",
+    "maturin>=1.0,<2.0",
     "pytest==8.3.5",
     "pytest-mock==3.14.0",
 ]
@@ -70,7 +76,7 @@ installer = [
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cpu", marker = "sys_platform == 'darwin'"},
-  { index = "pytorch-cu124", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+  { index = "pytorch-cu118", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
 ]
 
 [[tool.uv.index]]
@@ -79,24 +85,38 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
+#To maintain compatibility with older GPUs.
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 
 
 [build-system]
-requires = ["scikit-build-core", "cython >= 3.0.2", "numpy >= 1.26.4"]
-build-backend = "scikit_build_core.build"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 
-[tool.scikit-build]
-experimental = true
-wheel.packages = ["invesalius","invesalius_cy"]
-editable.mode = "inplace"
-metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+[tool.maturin]
+# Build the Rust extension module
+features = ["pyo3/extension-module"]
+# Manifest path for Rust project
+manifest-path = "invesalius_rs/Cargo.toml"
+# Module name - use _native suffix so __init__.py can wrap it
+module-name = "invesalius_rs._native"
+# Python source directory
+python-source = "."
+# Python packages to include
+python-packages = ["invesalius", "invesalius_rs"]
+# Strip the library for minimum file size
+strip = true
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "invesalius_rs/src/**/*.rs" }, { file = "invesalius_rs/Cargo.toml" }, { file = "invesalius_rs/Cargo.lock" }]
+
 
 [tool.setuptools]
-packages = ["invesalius","invesalius_cy"]
+packages = []
+py-modules = []
 
 [tool.setuptools_scm]
 write_to = "invesalius/__version__.py"
@@ -169,12 +189,13 @@ module = [
     'win32com.*',
     'sigar.*',
     'numpy.*',
+    'invesalius_rs.*',
 ]
 ignore_missing_imports = true
 
 
 [tool.ruff]
-include = ["pyproject.toml", "invesalius/**/*.py",'setup.py','app.py',"typings/**/*.pyi"]
+include = ["pyproject.toml", "invesalius/**/*.py","app.py","typings/**/*.pyi"]
 line-length = 100
 extend-exclude = ["invesalius/__version__.py"]
 
@@ -184,4 +205,3 @@ extend-ignore = ["E731"]
 
 [tool.ruff.format]
 line-ending = "lf"
-

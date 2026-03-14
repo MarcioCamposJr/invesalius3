@@ -31,9 +31,9 @@ from scipy import ndimage
 import invesalius.constants as const
 import invesalius.data.converters as converters
 import invesalius.session as ses
+import invesalius_rs as floodfill
 from invesalius.data.volume_mask import VolumeMask
 from invesalius.pubsub import pub as Publisher
-from invesalius_cy import floodfill
 
 
 class EditionHistoryNode:
@@ -227,6 +227,25 @@ class Mask:
 
         self.history = EditionHistory()
 
+    @property
+    def category(self):
+        if self.name.lower().startswith("cortical"):
+            return "Cortical"
+        elif self.name.lower().startswith("subcortical"):
+            return "Subcortical"
+        elif self.name.lower().startswith("ventricles"):
+            return "Ventricles"
+        elif self.name.lower().startswith("white_matter"):
+            return "White matter"
+        elif self.name.lower().startswith("cerebellum"):
+            return "Cerebellum"
+        elif self.name.lower().startswith("brain_stem"):
+            return "Brain stem"
+        elif self.name.lower().startswith("choroid_plexus"):
+            return "Choroid plexus"
+        else:
+            return "General"
+
     def __bind_events(self):
         Publisher.subscribe(self.OnFlipVolume, "Flip volume")
         Publisher.subscribe(self.OnSwapVolumeAxes, "Swap volume axes")
@@ -293,7 +312,7 @@ class Mask:
 
     def SavePlist(self, dir_temp, filelist):
         mask = {}
-        filename = "mask_%d" % self.index
+        filename = f"mask_{self.index}"
         mask_filename = f"{filename}.dat"
         # mask_filepath = os.path.join(dir_temp, mask_filename)
         filelist[self.temp_file] = mask_filename
@@ -466,7 +485,8 @@ class Mask:
             bstruct = ndimage.generate_binary_structure(3, CON3D[conn])
 
             imask = ~(matrix > 127)
-            labels, nlabels = ndimage.label(imask, bstruct, output=np.uint16)
+            labels, nlabels = ndimage.label(imask, bstruct, output=np.uint32)
+            labels = np.asarray(labels, dtype=np.uint32, order="C")
 
             if nlabels == 0:
                 return
@@ -487,7 +507,8 @@ class Mask:
             cp_mask = matrix.copy()
 
             imask = ~(matrix > 127)
-            labels, nlabels = ndimage.label(imask, bstruct, output=np.uint16)
+            labels, nlabels = ndimage.label(imask, bstruct, output=np.uint32)
+            labels = np.asarray(labels, dtype=np.uint32, order="C")
 
             if nlabels == 0:
                 return

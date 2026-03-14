@@ -213,7 +213,7 @@ class Viewer(wx.Panel):
         self.slice_data = None
 
         self.slice_actor = None
-        self.interpolation_slice_status = True
+        self.interpolation_slice_status = False
 
         self.canvas = None
 
@@ -1256,9 +1256,9 @@ class Viewer(wx.Panel):
 
         session = ses.Session()
         if session.GetConfig("slice_interpolation"):
-            actor.InterpolateOff()
-        else:
             actor.InterpolateOn()
+        else:
+            actor.InterpolateOff()
 
         slice_data = sd.SliceData()
         slice_data.SetOrientation(self.orientation)
@@ -1277,9 +1277,9 @@ class Viewer(wx.Panel):
         if self.slice_actor is not None:
             session = ses.Session()
             if session.GetConfig("slice_interpolation"):
-                self.slice_actor.InterpolateOff()
-            else:
                 self.slice_actor.InterpolateOn()
+            else:
+                self.slice_actor.InterpolateOff()
             if not self.nav_status:
                 self.UpdateRender()
 
@@ -1323,16 +1323,14 @@ class Viewer(wx.Panel):
         cp_draw_list = self.canvas.draw_list[:]
         self.canvas.draw_list = []
 
-        # Removing all measures
+        # Removing all measures securely avoiding module caching isinstance bugs
         for i in cp_draw_list:
-            if not isinstance(
-                i,
-                (
-                    measures.AngularMeasure,
-                    measures.LinearMeasure,
-                    measures.CircleDensityMeasure,
-                    measures.PolygonDensityMeasure,
-                ),
+            if type(i).__name__ not in (
+                "AngularMeasure",
+                "LinearMeasure",
+                "AnnotationMeasure",
+                "CircleDensityMeasure",
+                "PolygonDensityMeasure",
             ):
                 self.canvas.draw_list.append(i)
 
@@ -1375,6 +1373,40 @@ class Viewer(wx.Panel):
             "Change slice from slice plane", orientation=self.orientation, index=pos
         )
 
+    def UpdateStatusbarInfo(self):
+        try:
+            if not hasattr(self, "slice_") or self.slice_ is None:
+                return
+            if not hasattr(self.slice_, "matrix") or self.slice_.matrix is None:
+                return
+            if self.slice_data is None:
+                return
+
+            mx, my = self.get_vtk_mouse_position()
+            px, py = self.get_slice_pixel_coord_by_screen_pos(mx, my)
+            slice_number = self.slice_data.number
+
+            matrix = self.slice_.matrix
+            dz, dy, dx = matrix.shape
+
+            if self.orientation == "AXIAL":
+                vx, vy, vz = int(px), int(py), slice_number
+            elif self.orientation == "CORONAL":
+                vx, vy, vz = int(px), slice_number, int(py)
+            else:  # SAGITAL
+                vx, vy, vz = slice_number, int(px), int(py)
+
+            if 0 <= vx < dx and 0 <= vy < dy and 0 <= vz < dz:
+                voxel_value = matrix[vz, vy, vx]
+                info = (
+                    f"Window: {self.orientation.capitalize()}  |  "
+                    f"Pos: ({int(px)}, {int(py)})  Slice: {slice_number}  |  "
+                    f"Value: {voxel_value}"
+                )
+                Publisher.sendMessage("Update statusbar image info", info=info)
+        except Exception:
+            pass
+
     def OnScrollBar(self, evt=None, update3D=True):
         pos = self.scroll.GetThumbPosition()
         self.set_slice_number(pos)
@@ -1391,6 +1423,8 @@ class Viewer(wx.Panel):
             self.style.OnScrollBar()
         except AttributeError:
             pass
+
+        self.UpdateStatusbarInfo()
 
         if evt:
             if self._flush_buffer:

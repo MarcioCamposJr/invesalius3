@@ -53,10 +53,7 @@ if sys.platform not in ("win32", "darwin"):
 import wx
 from wx.adv import SPLASH_CENTRE_ON_SCREEN, SPLASH_TIMEOUT, SplashScreen
 
-import invesalius.enhanced_logging
-import invesalius.error_handling
-import invesalius.gui.language_dialog as lang_dlg
-import invesalius.gui.log as log
+# import invesalius.error_handling
 import invesalius.i18n as i18n
 import invesalius.session as ses
 import invesalius.utils as utils
@@ -119,9 +116,13 @@ class InVesalius(wx.App):
         self.frame.Raise()
 
         # Initialize the enhanced logging system
+        import invesalius.enhanced_logging
+
         invesalius.enhanced_logging.register_menu_handler()
 
         # Initialize the legacy logging system for backward compatibility
+        import invesalius.gui.log as log
+
         log.invLogger.configureLogging()
 
 
@@ -155,6 +156,8 @@ class Inv3SplashScreen(SplashScreen):
         # If no language is set into session file, show dialog so
         # user can select language
         if not install_lang:
+            import invesalius.gui.language_dialog as lang_dlg
+
             dialog = lang_dlg.LanguageDialog()
 
             # FIXME: This works ok in linux2, darwin and win32,
@@ -171,7 +174,8 @@ class Inv3SplashScreen(SplashScreen):
                 else:
                     homedir = os.path.expanduser("~")
                     config_dir = os.path.join(homedir, ".invesalius")
-                    shutil.rmtree(config_dir)
+                    if os.path.exists(config_dir):
+                        shutil.rmtree(config_dir)
 
                     sys.exit()
 
@@ -237,19 +241,6 @@ class Inv3SplashScreen(SplashScreen):
         p = Thread(target=utils.UpdateCheck, args=())
         p.start()
 
-        if not session.ExitedSuccessfullyLastTime():
-            # Reopen project
-            project_path = session.GetState("project_path")
-            if project_path is not None:
-                filepath = os.path.join(project_path[0], project_path[1])
-                if os.path.exists(filepath):
-                    Publisher.sendMessage("Open project", filepath=filepath)
-                else:
-                    utils.debug(f"File doesn't exist: {filepath}")
-                    session.CloseProject()
-        else:
-            session.CreateState()
-
     def OnClose(self, evt):
         # Make sure the default handler runs too so this window gets
         # destroyed
@@ -266,8 +257,113 @@ class Inv3SplashScreen(SplashScreen):
         if not self.main.IsShown():
             self.main.Show()
             self.main.Raise()
-        # Destroy the splash screen
-        self.Destroy()
+
+        # Hide splash screen so it doesn't linger visually
+        self.Hide()
+
+        # Defer crash recovery to ensure self.main geometry is fully realized
+        # by the window manager before center calculation (fixes GNOME Flashback)
+        wx.CallAfter(self._deferred_crash_recovery)
+
+    def _deferred_crash_recovery(self):
+        self.CheckCrashRecovery()
+        # Guard: The parent SplashScreen auto-destroys itself via a timer.
+        # If the user took time on the dialog, the C++ object may already be
+        # gone by now, so only call Destroy() if we're still alive.
+        try:
+            if not self.IsBeingDeleted():
+                self.Destroy()
+        except RuntimeError:
+            pass  # Already destroyed by splash screen timeout — that's fine
+
+    def _mark_recovered_project_as_changed(self):
+        """Called after opening a recovered backup to mark it as having unsaved
+        changes, so the 'Save before closing?' dialog is shown correctly."""
+        import invesalius.constants as const
+
+        session.SetConfig("project_status", const.PROJECT_STATUS_CHANGED)
+        session._has_unsaved_changes = True
+
+    def CheckCrashRecovery(self):
+        if not session.ExitedSuccessfullyLastTime():
+            # Check for auto-backup
+            backup_path = session.GetAutoBackupPath()
+
+            if backup_path:
+                # Show recovery dialog
+                msg = (
+                    "InVesalius did not exit successfully last time.\n\n"
+                    "An auto-backup of your unsaved work was found.\n"
+                    "Would you like to recover it?"
+                )
+                dlg = wx.MessageDialog(
+                    self.main, msg, "InVesalius 3 - Crash Recovery", wx.ICON_QUESTION | wx.YES_NO
+                )
+                dlg.SetYesNoLabels("Recover", "Discard")
+                dlg.CenterOnParent()
+
+                answer = dlg.ShowModal()
+                dlg.Destroy()
+
+                if answer == wx.ID_YES:
+                    # Recover from backup
+                    if os.path.exists(backup_path):
+                        wx.CallAfter(Publisher.sendMessage, "Open project", filepath=backup_path)
+                        # After project opens, mark it as CHANGED so the close
+                        # dialog asks "Do you want to save?" (the backup was
+                        # never formally saved by the user)
+                        wx.CallAfter(self._mark_recovered_project_as_changed)
+                    else:
+                        utils.debug(f"Backup file doesn't exist: {backup_path}")
+                        session.RemoveAutoBackup()
+                else:
+                    # User chose to discard backup
+                    session.RemoveAutoBackup()
+            else:
+                # No backup exists, but we crashed. Ask the user to re-open
+                project_path = session.GetState("project_path")
+                if project_path is not None:
+                    filepath = os.path.join(project_path[0], project_path[1])
+                    if os.path.exists(filepath):
+                        msg = (
+                            "InVesalius did not exit successfully last time.\n\n"
+                            f"Would you like to reopen the last opened project?\n{filepath}"
+                        )
+                        dlg = wx.MessageDialog(
+                            self.main,
+                            msg,
+                            "InVesalius 3 - Crash Recovery",
+                            wx.ICON_QUESTION | wx.YES_NO,
+                        )
+                        dlg.SetYesNoLabels("Reopen", "Cancel")
+                        dlg.CenterOnParent()
+
+                        answer = dlg.ShowModal()
+                        dlg.Destroy()
+
+                        if answer == wx.ID_YES:
+                            wx.CallAfter(Publisher.sendMessage, "Open project", filepath=filepath)
+                        else:
+                            # User canceled reopening last project
+                            session.CloseProject()
+                    else:
+                        utils.debug(f"File doesn't exist: {filepath}")
+                        session.CloseProject()
+                else:
+                    session.CloseProject()
+        else:
+            # Last exit was clean. Check if the user closed with "Store session"
+            # — in which case we should silently reopen the project, not show any dialog.
+            if session.GetState("stored_session"):
+                project_path = session.GetState("project_path")
+                if project_path:
+                    filepath = os.path.join(project_path[0], project_path[1])
+                    if os.path.exists(filepath):
+                        wx.CallAfter(Publisher.sendMessage, "Open project", filepath=filepath)
+                    else:
+                        utils.debug(f"Stored session project not found: {filepath}")
+            # Start fresh state for this new session (clears stored_session flag too)
+            session.CreateState()
 
 
 def non_gui_startup(args):
@@ -559,6 +655,30 @@ def init():
         sys.stderr = open(path, "w")
 
 
+def load_neuronavigation(args, connection, remote_host):
+    session = ses.Session()
+    session.SetConfig("debug", args.debug)
+    session.SetConfig("debug_efield", args.debug_efield)
+
+    if args.debug:
+        Publisher.subscribe(print_events, Publisher.ALL_TOPICS)
+
+    if remote_host is not None or args.remote_host is not None:
+        from invesalius.net.remote_control import RemoteControl
+
+        remote_control = RemoteControl(remote_host or args.remote_host)
+        remote_control.connect()
+
+    if args.use_pedal:
+        from invesalius.net.pedal_connection import MidiPedal
+
+        MidiPedal().start()
+
+    from invesalius.net.neuronavigation_api import NeuronavigationApi
+
+    NeuronavigationApi(connection)
+
+
 def main(connection=None, remote_host=None):
     """
     Start InVesalius.
@@ -582,32 +702,14 @@ def main(connection=None, remote_host=None):
 
     args = parse_command_line()
 
-    session = ses.Session()
-    session.SetConfig("debug", args.debug)
-    session.SetConfig("debug_efield", args.debug_efield)
-
-    if args.debug:
-        Publisher.subscribe(print_events, Publisher.ALL_TOPICS)
-
-    if remote_host is not None or args.remote_host is not None:
-        from invesalius.net.remote_control import RemoteControl
-
-        remote_control = RemoteControl(remote_host or args.remote_host)
-        remote_control.connect()
-
-    if args.use_pedal:
-        from invesalius.net.pedal_connection import MidiPedal
-
-        MidiPedal().start()
-
-    from invesalius.net.neuronavigation_api import NeuronavigationApi
-
-    NeuronavigationApi(connection)
-
     if args.no_gui:
         non_gui_startup(args)
     else:
         application = InVesalius(False)
+        # TODO: To avoid related translation (i18n) problems, any additional
+        # module loading, especially those using constants.py,
+        # should be placed after this section.
+        load_neuronavigation(args, connection, remote_host)
         application.MainLoop()
 
 

@@ -11,8 +11,9 @@ from pathlib import Path
 SOURCE_DIR = Path("./").resolve()
 print("SOURCE_DIR", SOURCE_DIR)
 
-from PyInstaller.utils.hooks import get_module_file_attribute, collect_dynamic_libs
-from PyInstaller.compat import is_darwin
+from PyInstaller.utils.hooks import get_module_file_attribute,\
+                                    collect_dynamic_libs, collect_data_files, collect_all
+
 
 python_dir = os.path.dirname(sys.executable)
 venv_dir = os.path.dirname(python_dir) 
@@ -49,9 +50,9 @@ for v in vtk_files:
         dest_dir = os.path.dirname(v.replace(site_packages, ''))[1:]
         libraries.append((v, dest_dir))
 
-# Add interpolation module
-libraries.append((glob.glob(os.path.join(SOURCE_DIR, 'invesalius_cy', 
-    'interpolation.*.so'))[0], 'invesalius_cy'))  # .so files for macOS
+## Add invesalius_rs module (Rust extension)
+#libraries.append((glob.glob(os.path.join(SOURCE_DIR, 'invesalius_rs', 
+#    '_native.*.so'))[0], 'invesalius_rs'))  # .so files for macOS
 
 # -- data files -----
 
@@ -100,6 +101,26 @@ for sd in sample_data:
     dest_dir = os.path.dirname(sd)
     data_files.append((sd, dest_dir))
 
+tinygrad_data, tinygrad_binaries, tinygrad_hiddenimports = collect_all("tinygrad")
+data_files += tinygrad_data
+libraries += tinygrad_binaries
+
+onnx_data, onnx_binaries, onnx_hiddenimports = collect_all("onnxruntime")
+invesalius_rs_data, invesalius_rs_binaries, invesalius_rs_hiddenimports = collect_all("invesalius_rs")
+
+data_files += onnx_data
+data_files += invesalius_rs_data
+
+libraries += onnx_binaries
+
+invesalius_rs_binaries_list = glob.glob(os.path.join(SOURCE_DIR, 'invesalius_rs', '*.so'))
+invesalius_rs_binaries = [(cy_bin, "invesalius_rs") for cy_bin in invesalius_rs_binaries_list]
+
+libraries += invesalius_rs_binaries
+
+print("----------")
+print(libraries)
+    
 #---------------------------------------------------------------------------------
 
 block_cipher = None
@@ -117,7 +138,7 @@ a = Analysis(['app.py'],
                           'pywt._extensions._cwt',
                           'skimage.filters.rank.core_cy_3d',
                           'encodings',
-                          'setuptools'],
+                          'setuptools'] + onnx_hiddenimports + tinygrad_hiddenimports + invesalius_rs_hiddenimports,
              hookspath=[],
              runtime_hooks=[],
              excludes=[],

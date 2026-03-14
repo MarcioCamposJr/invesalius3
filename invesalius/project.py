@@ -124,15 +124,19 @@ class Project(metaclass=Singleton):
 
     def RemoveMask(self, index: int) -> None:
         new_dict = TwoWaysDictionary()
-        new_index = 0
-        for i in self.mask_dict:
+        # Iterate safely over a snapshot of items
+        for i, mask in self.mask_dict.items():
             if i == index:
-                mask = self.mask_dict[i]
+                # Clean up the removed mask
                 mask.cleanup()
-            else:
-                new_dict[new_index] = self.mask_dict[i]
-                self.mask_dict[i] = new_index
-                new_index += 1
+                continue
+            # Compute the new index and update mask
+            new_i = i if i < index else i - 1
+            new_dict[new_i] = mask
+            # Keep the mask's own index in sync
+            if hasattr(mask, "index"):
+                mask.index = new_i
+        # Replace the dictionary with the rebuilt one
         self.mask_dict = new_dict
 
     def GetMask(self, index):
@@ -469,7 +473,9 @@ class Project(metaclass=Singleton):
             for index in self.mask_dict:
                 mask = self.mask_dict[index]
                 s.do_threshold_to_all_slices(mask)
-                mask_nifti = nib.Nifti1Image(np.swapaxes(np.fliplr(mask.matrix), 0, 2), None)
+
+                mask_data = mask.matrix[1:, 1:, 1:]
+                mask_nifti = nib.Nifti1Image(np.swapaxes(np.fliplr(mask_data), 0, 2), None)
                 mask_nifti.header.set_zooms(s.spacing)
                 if filename.lower().endswith(".nii"):
                     basename = filename[:-4]
