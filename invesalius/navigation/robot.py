@@ -83,15 +83,6 @@ class Robot:
         self.__bind_events()
 
     def __bind_events(self):
-        Publisher.subscribe(
-            self.AbortRobotConfiguration, "Robot to Neuronavigation: Close robot dialog"
-        )
-        Publisher.subscribe(
-            self.OnRobotConnectionStatus, "Robot to Neuronavigation: Robot connection status"
-        )
-        Publisher.subscribe(self.SetObjectiveByRobot, "Robot to Neuronavigation: Set objective")
-        Publisher.subscribe(self.OnRobotInitialConfig, "Robot to Neuronavigation: Initial config")
-
         Publisher.subscribe(self.SetTarget, "Set target")
         Publisher.subscribe(self.UnsetTarget, "Unset target")
 

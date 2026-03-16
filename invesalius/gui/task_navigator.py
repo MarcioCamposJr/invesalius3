@@ -1905,7 +1905,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=False,
             initial_bg_color=self.GREY_COLOR,
-            parent= scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle button to track the coil
@@ -1915,7 +1915,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle button for allowing triggering only if coil is at target
@@ -1925,6 +1925,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=False,
             initial_bg_color=self.GREY_COLOR,
+            parent=scroll_panel,
         )
 
         # Toggle button for showing coil during navigation
@@ -1934,7 +1935,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle button for showing probe during navigation
@@ -1944,7 +1945,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle Button to use serial port to trigger pulse signal and create markers
@@ -1954,7 +1955,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True,  # Default is enabled
             initial_bg_color=self.RED_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle Button for Efield
@@ -1964,7 +1965,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=False,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # Toggle Button for Target Mode
@@ -1974,7 +1975,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=False,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         self.simultaneous_mode_button = self._create_toggle_button(
@@ -1983,7 +1984,7 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True if self.navigation.n_coils > 1 else False,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         self.show_motor_map_button = self._create_toggle_button(
@@ -1992,13 +1993,14 @@ class ControlPanel(wx.Panel):
             initial_value=False,
             initial_enabled=True,
             initial_bg_color=self.GREY_COLOR,
-            parent=scroll_panel
+            parent=scroll_panel,
         )
 
         # sizers
         start_navigation_button_sizer = wx.BoxSizer(wx.VERTICAL)
         start_navigation_button_sizer.AddMany([(btn_nav, 0, wx.EXPAND | wx.GROW)])
 
+        # Navigation buttons grid — all children of scroll_panel
         navigation_buttons_sizer = wx.FlexGridSizer(rows=3, cols=4, vgap=3, hgap=3)
         navigation_buttons_sizer.AddMany(
             [
@@ -2014,22 +2016,28 @@ class ControlPanel(wx.Panel):
                 (self.lock_to_target_button),
             ]
         )
-        static_box_navigation_buttons = wx.StaticBox(self, label=_("Navigation"))
+
+        # StaticBox and robot buttons also belong to scroll_panel
+        static_box_navigation_buttons = wx.StaticBox(scroll_panel, label=_("Navigation"))
         static_box_sizer = wx.StaticBoxSizer(static_box_navigation_buttons, wx.VERTICAL)
         static_box_sizer.Add(navigation_buttons_sizer, 1, wx.EXPAND, 10)
 
-        self.buttons_size = wx.BoxSizer(wx.VERTICAL)
-        self.buttons_size.Add(static_box_sizer, 0, wx.EXPAND, 10)
         self.robot_buttons_sizers = wx.BoxSizer(wx.VERTICAL)
         self.robot_buttons_panel = {}
         self.robot_buttons = {}
         self._create_toggle_robot_button()
-        self.buttons_size.Add(self.robot_buttons_sizers, 0, wx.EXPAND, 10)
+
+        # scroll_panel sizer: navigation buttons + robot buttons
+        scroll_sizer = wx.BoxSizer(wx.VERTICAL)
+        scroll_sizer.Add(static_box_sizer, 0, wx.EXPAND, 10)
+        scroll_sizer.Add(self.robot_buttons_sizers, 0, wx.EXPAND, 10)
+        scroll_panel.SetSizer(scroll_sizer)
+
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddMany(
             [
                 (start_navigation_button_sizer, 0, wx.EXPAND | wx.TOP, 5),
-                (self.buttons_size, 0, wx.EXPAND | wx.TOP, 5),
+                (scroll_panel, 1, wx.EXPAND | wx.TOP, 5),
             ]
         )
 
@@ -2179,7 +2187,7 @@ class ControlPanel(wx.Panel):
     def _create_toggle_robot_button(self):
         for idx, robot_ID in enumerate(self.robot.GetAllRobots().keys()):
             if robot_ID not in self.robot_buttons_panel:
-                robot_panel = wx.Panel(self)
+                robot_panel = wx.Panel(self.scroll_panel)
                 self.robot_buttons_panel[robot_ID] = robot_panel
                 static_box = wx.StaticBox(robot_panel, label=_(robot_ID))
                 static_box_sizer = wx.StaticBoxSizer(static_box, wx.VERTICAL)
