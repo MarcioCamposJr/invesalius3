@@ -2298,6 +2298,7 @@ class ControlPanel(wx.Panel):
 
             # Ensure that the target is sent to robot when navigation starts.
             self.robot.SendTargetToAllRobots()
+            self.robot.ThreadingCoilDistance(True)
 
     def OnStartNavigationButton(self, evt, btn_nav):
         nav_id = btn_nav.GetValue()
@@ -2311,6 +2312,7 @@ class ControlPanel(wx.Panel):
 
         # Set robot objective to NONE when stopping navigation.
         self.robot.SetAllRobotsNoObjective()
+        self.robot.ThreadingCoilDistance(False)
 
         self.navigation.StopNavigation()
 

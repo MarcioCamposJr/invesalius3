@@ -18,6 +18,8 @@
 # --------------------------------------------------------------------------
 
 from enum import Enum
+import threading
+import time
 
 import numpy as np
 import wx
@@ -400,6 +402,10 @@ class Robots(metaclass=Singleton):
         self.RobotCoilAssociation = {}
         self.BallCreated = False
 
+        self.distance_coils = 0.0
+        self.brake_vector = {}
+        self.threading_coils = threading.Thread(target=self.CalculateCoilDistance)
+
         if self.navigation.n_coils > 1:
             self.CreateSecondRobot()
 
@@ -428,65 +434,80 @@ class Robots(metaclass=Singleton):
         robot = self.GetRobot(robot_ID)
         robot.AbortRobotConfiguration()
 
+    def ThreadingCoilDistance(self, state: bool):
+        if state and not self.threading_coils.alive():
+            self.threading_coils.start()
+        else:
+            if self.threading_coils.alive():
+                self.threading_coils.join()
+                self.distance_coils = None
+                self.brake_vector = {}
+
     def CalculateCoilDistance(self):
-        coils_name = self.GetAllCoilsRobots()
-        if not all(coils_name):
-            return None, None
-
-        obbs_world = {}  # OBB vertices in world frame for each robot
-        coords_all = {}  # Store coords for each robot
-
-        for coil_name in coils_name:
-            robot = self.GetRobotByCoil(coil_name=coil_name)
-
-            # Skip if OBB was not computed for this coil
-            if robot.obb_local is None:
+        while True:
+            coils_name = self.GetAllCoilsRobots()
+            if not all(coils_name):
+                self.ThreadingCoilDistance(False)
                 return None, None
 
-            # Get tracker coordinates
-            coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(robot_ID=robot.robot_name)
-            coords_all[robot.robot_name] = coords  # Save for each robot
+            obbs_world = {}  # OBB vertices in world frame for each robot
+            coords_all = {}  # Store coords for each robot
 
-            pose_idx = 2 if robot.robot_name == "robot_1" else 3
-            pose_coil_atual = coords[pose_idx]
+            for coil_name in coils_name:
+                robot = self.GetRobotByCoil(coil_name=coil_name)
 
-            t_atual = pose_coil_atual[:3]
-            angles_atual = pose_coil_atual[3:]
+                # Skip if OBB was not computed for this coil
+                if robot.obb_local is None:
+                    self.ThreadingCoilDistance(False)
+                    return None, None
 
-            R_atual = Rotation.from_euler("ZYX", angles_atual, degrees=True).as_matrix()
+                # Get tracker coordinates
+                coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(robot_ID=robot.robot_name)
+                coords_all[robot.robot_name] = coords  # Save for each robot
 
-            # Transform OBB from marker-local to world coordinates
-            obb_center_local, obb_axes_local = robot.obb_local
-            obb_center_world = R_atual @ obb_center_local + t_atual
-            obb_axes_world = (R_atual @ obb_axes_local.T).T  # each row is a half-axis in world
+                pose_idx = 2 if robot.robot_name == "robot_1" else 3
+                pose_coil_atual = coords[pose_idx]
 
-            # Build the 8 vertices of the OBB
-            vertices = obb_vertices_from_center_axes(obb_center_world, obb_axes_world)
-            obbs_world[robot.robot_name] = vertices
+                t_atual = pose_coil_atual[:3]
+                angles_atual = pose_coil_atual[3:]
 
-        if len(obbs_world) < 2:
-            return None, None
+                R_atual = Rotation.from_euler("ZYX", angles_atual, degrees=True).as_matrix()
 
-        # Use GJK to compute minimum distance between the two OBBs
-        min_distance, closest_pt_1, closest_pt_2 = gjk_distance(
-            obbs_world["robot_1"], obbs_world["robot_2"]
-        )
+                # Transform OBB from marker-local to world coordinates
+                obb_center_local, obb_axes_local = robot.obb_local
+                obb_center_world = R_atual @ obb_center_local + t_atual
+                obb_axes_world = (R_atual @ obb_axes_local.T).T  # each row is a half-axis in world
 
-        # Head/subject coordinate (tracker index 1)
-        subject_pos_robot1 = coords_all["robot_1"][1][:3]
-        subject_pos_robot2 = coords_all["robot_2"][1][:3]
+                # Build the 8 vertices of the OBB
+                vertices = obb_vertices_from_center_axes(obb_center_world, obb_axes_world)
+                obbs_world[robot.robot_name] = vertices
 
-        brake_vectors = {}
-        brake_vectors["robot_1"] = self.CalculateBrakeVector(
-            closest_pt_1, closest_pt_2, subject_pos_robot1
-        )
-        brake_vectors["robot_2"] = self.CalculateBrakeVector(
-            closest_pt_2, closest_pt_1, subject_pos_robot2
-        )
+            if len(obbs_world) < 2:
+                self.ThreadingCoilDistance(False)
+                return None, None
 
-        min_distance = 0.5 if min_distance == 0.0 else min_distance
+            # Use GJK to compute minimum distance between the two OBBs
+            min_distance, closest_pt_1, closest_pt_2 = gjk_distance(
+                obbs_world["robot_1"], obbs_world["robot_2"]
+            )
+
+            # Head/subject coordinate (tracker index 1)
+            subject_pos_robot1 = coords_all["robot_1"][1][:3]
+            subject_pos_robot2 = coords_all["robot_2"][1][:3]
+
+            brake_vectors = {}
+            brake_vectors["robot_1"] = self.CalculateBrakeVector(
+                closest_pt_1, closest_pt_2, subject_pos_robot1
+            )
+            brake_vectors["robot_2"] = self.CalculateBrakeVector(
+                closest_pt_2, closest_pt_1, subject_pos_robot2
+            )
+
+            min_distance = 0.5 if min_distance == 0.0 else min_distance
             
-        return min_distance, brake_vectors
+            self.distance_coils = min_distance
+            self.brake_vector = brake_vectors
+            time.sleep(0.1)
 
     def CalculateBrakeVector(self, closest_point_coil, closest_point_other, subject_pos):
         """
@@ -528,9 +549,6 @@ class Robots(metaclass=Singleton):
             return brake_direction
 
         return None
-
-    def UpdaeCoilsPosesView(self, points_of_interesting):
-        Publisher.sendMessage("Update dynamic Balls", positions=points_of_interesting)
 
     def SendTrackerPoses(self, poses, visibilities):
         robots = self.GetAllRobots()
@@ -633,14 +651,13 @@ class Robots(metaclass=Singleton):
         return all(allReady)
 
     def UpdateCoilsDistance(self):
-        if self.RobotCoilAssociation and len(self.RobotCoilAssociation) > 1:
-            distance_result, brake_vectors = self.CalculateCoilDistance()
-            if distance_result is not None:
+        if self.RobotCoilAssociation and len(self.RobotCoilAssociation) > 1: #TODO Improve this logic because we can use just one robot and two coils
+            if self.distance_coils is not None:
                 robots = self.GetAllRobots()
                 for robot_ID in robots.keys():
                     Publisher.sendMessage(
                         "Neuronavigation to Robot: Dynamically update distance coils",
-                        distance=distance_result,
-                        brake_vector=list(brake_vectors[robot_ID]),
+                        distance=self.distance_coils,
+                        brake_vector=list(self.brake_vector[robot_ID]),
                         robot_ID=robot_ID,
                     )

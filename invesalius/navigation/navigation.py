@@ -214,7 +214,6 @@ class UpdateNavigationScene(threading.Thread):
                     wx.CallAfter(
                         Publisher.sendMessage, "Update coil poses", m_imgs=m_imgs, coords=coords
                     )
-                    self.robot.UpdateCoilsDistance()
 
                     for coil in coils:
                         robot_ID = self.robot.GetRobotByCoil(coil).robot_name
@@ -273,6 +272,8 @@ class UpdateNavigationScene(threading.Thread):
                 # Render the volume viewer and the slice viewers.
                 wx.CallAfter(Publisher.sendMessage, "Render volume viewer")
                 wx.CallAfter(Publisher.sendMessage, "Update slice viewer")
+
+                self.robot.UpdateCoilsDistance()
 
                 self.coord_queue.task_done()
 
