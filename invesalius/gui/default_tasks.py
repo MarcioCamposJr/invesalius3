@@ -259,8 +259,12 @@ class LowerTaskPanel(wx.Panel):
     def ResizeFPB(self):
         # y_needed = self.fold_panel.GetPanelsLength(0, 0)[2]
         x_current, _ = self.GetSize()
-        min_size = (x_current, 240) if sys.platform != "win32" else (x_current, 230)
-        self.SetMinSize(min_size)
+        default_h = 240 if sys.platform != "win32" else 230
+        # Use the actual space needed by the fold panel, so that when Data
+        # is collapsed the upper panel can reclaim the freed space.
+        y_needed = self.fold_panel.GetPanelsLength(0, 0)[2]
+        min_h = min(default_h, y_needed) if y_needed > 0 else default_h
+        self.SetMinSize((x_current, min_h))
         self.GetParent().Layout()
 
 

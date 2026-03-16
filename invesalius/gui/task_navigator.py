@@ -1821,7 +1821,7 @@ class NavigationPanel(wx.Panel):
         main_sizer.AddMany(
             [
                 (top_sizer, 1, wx.EXPAND | wx.GROW),
-                (self.control_panel, 0, wx.EXPAND | wx.TOP, 5),
+                (self.control_panel, 0, wx.EXPAND | wx.TOP, 2),
             ]
         )
         self.sizer = main_sizer
@@ -1875,7 +1875,7 @@ class ControlPanel(wx.Panel):
         self.target_mode = False
         self.navigation_status = False
 
-        scroll_panel_size = wx.Size(-1, 150) if sys.platform != "win32" else wx.Size(-1, 230)
+        scroll_panel_size = wx.Size(-1, 150) if sys.platform != "win32" else wx.Size(-1, 250)
         scroll_panel = scrolled.ScrolledPanel(self, -1, size=scroll_panel_size)
         scroll_panel.SetupScrolling(scroll_x=False, scroll_y=True)
         self.scroll_panel = scroll_panel
@@ -2029,15 +2029,15 @@ class ControlPanel(wx.Panel):
 
         # scroll_panel sizer: navigation buttons + robot buttons
         scroll_sizer = wx.BoxSizer(wx.VERTICAL)
-        scroll_sizer.Add(static_box_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 10)
-        scroll_sizer.Add(self.robot_buttons_sizers, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 10)
+        scroll_sizer.Add(static_box_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 2)
+        scroll_sizer.Add(self.robot_buttons_sizers, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 0)
         scroll_panel.SetSizer(scroll_sizer)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer.AddMany(
             [
                 (start_navigation_button_sizer, 0, wx.EXPAND | wx.TOP, 5),
-                (scroll_panel, 1, wx.EXPAND | wx.TOP, 5),
+                (scroll_panel, 1, wx.EXPAND | wx.TOP, 2),
             ]
         )
 
@@ -2252,6 +2252,8 @@ class ControlPanel(wx.Panel):
         # if len(list_robot_id) > 1:
         robot_panel = self.robot_buttons_panel[list_robot_id[1]]
         robot_panel.Show(state)
+        self.scroll_panel.FitInside()
+        self.scroll_panel.SetupScrolling(scroll_x=False, scroll_y=True)
         self.Layout()
         # self.SetSizerAndFit(self.sizer)
 
