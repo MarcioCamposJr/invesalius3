@@ -1998,7 +1998,7 @@ class ControlPanel(wx.Panel):
 
         # sizers
         start_navigation_button_sizer = wx.BoxSizer(wx.VERTICAL)
-        start_navigation_button_sizer.AddMany([(btn_nav, 0, wx.EXPAND | wx.GROW)])
+        start_navigation_button_sizer.AddMany([(btn_nav, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.RIGHT, 15)])
 
         # Navigation buttons grid — all children of scroll_panel
         navigation_buttons_sizer = wx.FlexGridSizer(rows=3, cols=4, vgap=3, hgap=3)
@@ -2029,8 +2029,8 @@ class ControlPanel(wx.Panel):
 
         # scroll_panel sizer: navigation buttons + robot buttons
         scroll_sizer = wx.BoxSizer(wx.VERTICAL)
-        scroll_sizer.Add(static_box_sizer, 0, wx.EXPAND, 10)
-        scroll_sizer.Add(self.robot_buttons_sizers, 0, wx.EXPAND, 10)
+        scroll_sizer.Add(static_box_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 10)
+        scroll_sizer.Add(self.robot_buttons_sizers, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, 10)
         scroll_panel.SetSizer(scroll_sizer)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
