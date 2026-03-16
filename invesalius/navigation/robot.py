@@ -404,7 +404,9 @@ class Robots(metaclass=Singleton):
 
         self.distance_coils = 0.0
         self.brake_vector = {}
-        self.threading_coils = threading.Thread(target=self.CalculateCoilDistance)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self.threading_coils = threading.Thread(target=self.CalculateCoilDistance, daemon=True)
 
         if self.navigation.n_coils > 1:
             self.CreateSecondRobot()
@@ -435,31 +437,35 @@ class Robots(metaclass=Singleton):
         robot.AbortRobotConfiguration()
 
     def ThreadingCoilDistance(self, state: bool):
-        if state and not self.threading_coils.alive():
+        if state and not self.threading_coils.is_alive():
+            self._stop_event.clear()
+            self.threading_coils = threading.Thread(target=self.CalculateCoilDistance, daemon=True)
             self.threading_coils.start()
-        else:
-            if self.threading_coils.alive():
-                self.threading_coils.join()
+        elif not state:
+            self._stop_event.set()
+            if self.threading_coils.is_alive():
+                self.threading_coils.join(timeout=2.0)
+            with self._lock:
                 self.distance_coils = None
                 self.brake_vector = {}
 
     def CalculateCoilDistance(self):
-        while True:
+        while not self._stop_event.is_set():
             coils_name = self.GetAllCoilsRobots()
             if not all(coils_name):
-                self.ThreadingCoilDistance(False)
-                return None, None
+                return
 
             obbs_world = {}  # OBB vertices in world frame for each robot
             coords_all = {}  # Store coords for each robot
+            skip = False
 
             for coil_name in coils_name:
                 robot = self.GetRobotByCoil(coil_name=coil_name)
 
                 # Skip if OBB was not computed for this coil
                 if robot.obb_local is None:
-                    self.ThreadingCoilDistance(False)
-                    return None, None
+                    skip = True
+                    break
 
                 # Get tracker coordinates
                 coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(robot_ID=robot.robot_name)
@@ -482,9 +488,8 @@ class Robots(metaclass=Singleton):
                 vertices = obb_vertices_from_center_axes(obb_center_world, obb_axes_world)
                 obbs_world[robot.robot_name] = vertices
 
-            if len(obbs_world) < 2:
-                self.ThreadingCoilDistance(False)
-                return None, None
+            if skip or len(obbs_world) < 2:
+                return
 
             # Use GJK to compute minimum distance between the two OBBs
             min_distance, closest_pt_1, closest_pt_2 = gjk_distance(
@@ -504,10 +509,12 @@ class Robots(metaclass=Singleton):
             )
 
             min_distance = 0.5 if min_distance == 0.0 else min_distance
-            
-            self.distance_coils = min_distance
-            self.brake_vector = brake_vectors
-            time.sleep(0.1)
+
+            with self._lock:
+                self.distance_coils = min_distance
+                self.brake_vector = brake_vectors
+
+            self._stop_event.wait(0.1)
 
     def CalculateBrakeVector(self, closest_point_coil, closest_point_other, subject_pos):
         """
@@ -652,12 +659,15 @@ class Robots(metaclass=Singleton):
 
     def UpdateCoilsDistance(self):
         if self.RobotCoilAssociation and len(self.RobotCoilAssociation) > 1: #TODO Improve this logic because we can use just one robot and two coils
-            if self.distance_coils is not None:
+            with self._lock:
+                distance = self.distance_coils
+                brake = dict(self.brake_vector)
+            if distance is not None:
                 robots = self.GetAllRobots()
                 for robot_ID in robots.keys():
                     Publisher.sendMessage(
                         "Neuronavigation to Robot: Dynamically update distance coils",
-                        distance=self.distance_coils,
-                        brake_vector=list(self.brake_vector[robot_ID]),
+                        distance=distance,
+                        brake_vector=list(brake[robot_ID]),
                         robot_ID=robot_ID,
                     )
