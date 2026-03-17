@@ -197,17 +197,18 @@ class UpdateNavigationScene(threading.Thread):
                 # see the red cross in the position of the offset marker
 
                 # Update the slice viewers to show the current position of the tracked object.
-                wx.CallAfter(Publisher.sendMessage, "Update slices position", position=coord[:3])
+                if not self.navigation.multitarget:
+                    wx.CallAfter(Publisher.sendMessage, "Update slices position", position=coord[:3])
 
-                # Update the cross position to the current position of the tracked object, so that, e.g., when a
-                # new marker is created, it is created in the current position of the object.
-                wx.CallAfter(Publisher.sendMessage, "Set cross focal point", position=coord)
+                    # Update the cross position to the current position of the tracked object, so that, e.g., when a
+                    # new marker is created, it is created in the current position of the object.
+                    wx.CallAfter(Publisher.sendMessage, "Set cross focal point", position=coord)
 
-                wx.CallAfter(
-                    Publisher.sendMessage,
-                    "Update volume viewer pointer",
-                    position=[coord[0], -coord[1], coord[2]],
-                )
+                    wx.CallAfter(
+                        Publisher.sendMessage,
+                        "Update volume viewer pointer",
+                        position=[coord[0], -coord[1], coord[2]],
+                    )
 
                 if coil_visible and self.navigation.track_coil:
                     # Check pubsub "Update coil pose" dependencies
@@ -217,7 +218,7 @@ class UpdateNavigationScene(threading.Thread):
 
                     for coil in coils:
                         robot_ID = self.robot.GetRobotByCoil(coil).robot_name
-                        wx.CallAfter(  # LUKATODO: this is just for viewer_volume... which will be updated later to support multicoil (target, tracts & efield)
+                        wx.CallAfter(  # LUKATODO: this is just for viewer_volume... which will be updated later to support multicoil (target, tracts & efield) (still need check)
                             Publisher.sendMessage,
                             "Update coil pose",
                             m_img=m_imgs[coil],
@@ -226,6 +227,8 @@ class UpdateNavigationScene(threading.Thread):
                             coil_name=coil,
                         )
                         wx.CallAfter(
+
+                        # Used to external tools to get coil pose
                         Publisher.sendMessage,
                         "From Neuronavigation: Send coil pose",
                         coord=list(coords[coil]),
