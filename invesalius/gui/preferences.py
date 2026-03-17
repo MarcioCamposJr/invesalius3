@@ -1706,7 +1706,7 @@ class TrackerTab(wx.Panel):
 
         robot_index = list(self.robot.GetAllRobots().values())[0]
         self.setup_robot_1 = SetupRobot(self, robot_index)
-        self.main_sizer.Add(self.setup_robot_1, 0, wx.ALL | wx.EXPAND, 7)
+        self.main_sizer.Add(self.setup_robot_1, 0, wx.ALL | wx.EXPAND, 0)
 
         self.OnCreateSecondRobot()
 
@@ -1804,7 +1804,7 @@ class TrackerTab(wx.Panel):
                 # self.robot.CreateSecondRobot()
                 robot_index = list(self.robot.GetAllRobots().values())[1]
                 self.setup_robot_2 = SetupRobot(self, robot_index)
-                self.main_sizer.Add(self.setup_robot_2, 0, wx.ALL | wx.EXPAND, 7)
+                self.main_sizer.Add(self.setup_robot_2, 0, wx.ALL | wx.EXPAND, 0)
                 Publisher.sendMessage("Show second robot", state=True)
         else:
             # if "robot_2" in self.robot.robots:
@@ -1891,6 +1891,7 @@ class SetupRobot(wx.Panel):
         self.robot = robot
         self.robot_name = self.robot.robot_name
         self.robot_ip = robot.robot_ip
+        self.session = ses.Session()
 
         self.LoadConfig()
 
@@ -1972,11 +1973,83 @@ class SetupRobot(wx.Panel):
         rob_status_sizer.AddStretchSpacer(1)
         rob_status_sizer.Add(self.btn_rob_con, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL)
 
+        # --- Pressure force setpoint (slider) ---
+        # Config and scaling (slider is integer)
+        self.pressure_recommended = 10.0
+        self.pressure_match_tol = 0.1  # within 0.1 N counts as "at recommended"
+
+        self.pressure_min = 0.0
+        self.pressure_max = 40.0
+        self.pressure_step = 0.5
+        self.pressure_scale = int(1 / self.pressure_step)  # 10 for 0.1 resolution
+        self.pressure_setpoint = self.session.GetConfig(
+            "pressure_setpoint", self.pressure_recommended
+        )
+        
+        self.pressure_setpoint = max(
+            self.pressure_min, min(self.pressure_max, float(self.pressure_setpoint))
+        )
+
+        self.pressure_lbl = wx.StaticText(self, -1, _("Pressure setpoint (N):"))
+        self.pressure_val_lbl = wx.StaticText(self, -1, f"{self.pressure_setpoint:.1f} N")
+
+        # Color logic: turn red above threshold
+        self.pressure_warn_threshold = 20.0
+        self._pressure_lbl_default_fg = self.pressure_lbl.GetForegroundColour()
+        self._pressure_val_default_fg = self.pressure_val_lbl.GetForegroundColour()
+
+        # Apply initial color based on loaded value
+        self._apply_pressure_color(self.pressure_setpoint)
+
+        self.pressure_slider = wx.Slider(
+            self,
+            -1,
+            value=int(self.pressure_setpoint * self.pressure_scale),
+            minValue=int(self.pressure_min * self.pressure_scale),
+            maxValue=int(self.pressure_max * self.pressure_scale),
+            style=wx.SL_HORIZONTAL | wx.SL_AUTOTICKS,
+            size=wx.Size(-1, 23),
+        )
+
+        self.pressure_slider.SetToolTip(_("Set the desired pressure/force setpoint"))
+
+        try:
+            self.pressure_slider.SetTickFreq(self.pressure_scale, 1)
+        except Exception:
+            pass
+
+        self.pressure_slider.Bind(wx.EVT_SLIDER, self.OnPressureSlider)
+
+        if getattr(self.robot, "robot_init_config", None):
+            use_pressure_sensor = self.robot.robot_init_config.get("use_pressure_sensor", False)
+        else:
+            Publisher.sendMessage("Neuronavigation to Robot: Request config")
+
+         # quick-set button
+        self.btn_set_rec = wx.Button(self, -1, _("Set 10 N"), size=wx.Size(70, 23))
+        self.btn_set_rec.SetToolTip(_("Set pressure to the recommended 10 N"))
+        self.btn_set_rec.Bind(wx.EVT_BUTTON, self.OnSetRecommendedPressure)
+        
+        self.chk_enable_pressure = wx.CheckBox(self, -1)
+        self.chk_enable_pressure.SetToolTip(_("Enable pressure sensor"))
+        self.chk_enable_pressure.Bind(wx.EVT_CHECKBOX, self.OnTogglePressureSensor)
+        self.chk_enable_pressure.Enable(self.robot.IsConnected())
+        self._update_pressure_controls_state(self.robot.IsConnected() and use_pressure_sensor)
+
+
+        pressure_row = wx.BoxSizer(wx.HORIZONTAL)
+        pressure_row.Add(self.chk_enable_pressure, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 2)
+        pressure_row.Add(self.pressure_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        pressure_row.Add(self.pressure_slider, 1, wx.EXPAND | wx.RIGHT, 6)
+        pressure_row.Add(self.pressure_val_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        pressure_row.Add(self.btn_set_rec, 0, wx.ALIGN_CENTER_VERTICAL)
+
         rob_static_sizer = wx.StaticBoxSizer(
             wx.VERTICAL, self, _(f"Setup Robot - {self.robot_name}")
         )
-        rob_static_sizer.Add(rob_ip_sizer, 0, wx.ALL | wx.EXPAND, 7)
-        rob_static_sizer.Add(rob_status_sizer, 0, wx.ALL | wx.EXPAND, 7)
+        rob_static_sizer.Add(rob_ip_sizer, 0, wx.ALL | wx.EXPAND, 4)
+        rob_static_sizer.Add(rob_status_sizer, 0, wx.ALL | wx.EXPAND, 4)
+        rob_static_sizer.Add(pressure_row, 0, wx.ALL | wx.EXPAND, 4)
 
         self.main_sizer.Add(rob_static_sizer, 0, wx.ALL | wx.EXPAND, 7)
 
@@ -2195,11 +2268,9 @@ class SetupRobot(wx.Panel):
             gray_color = wx.Colour(150, 150, 150)
             self.pressure_lbl.SetForegroundColour(gray_color)
             self.pressure_val_lbl.SetForegroundColour(gray_color)
-            self.pressure_rec_lbl.SetForegroundColour(gray_color)
 
         self.pressure_lbl.Refresh()
         self.pressure_val_lbl.Refresh()
-        self.pressure_rec_lbl.Refresh()
 
     def OnTogglePressureSensor(self, evt):
         if not self.robot.robot_init_config:
@@ -2230,28 +2301,8 @@ class SetupRobot(wx.Panel):
             self.pressure_lbl.SetForegroundColour(self._pressure_lbl_default_fg)
             self.pressure_val_lbl.SetForegroundColour(self._pressure_val_default_fg)
 
-        # Recommended hint styling: green if near 5.0 N, grey otherwise
-        if abs(value - self.pressure_recommended) <= self.pressure_match_tol:
-            self.pressure_rec_lbl.SetForegroundColour(wx.Colour(0, 140, 0))  # green
-            try:
-                f = self.pressure_rec_lbl.GetFont()
-                f.SetWeight(wx.FONTWEIGHT_BOLD)
-                self.pressure_rec_lbl.SetFont(f)
-            except Exception:
-                pass
-        else:
-            self.pressure_rec_lbl.SetForegroundColour(wx.Colour(90, 90, 90))
-            try:
-                f = self.pressure_rec_lbl.GetFont()
-                f.SetWeight(wx.FONTWEIGHT_NORMAL)
-                self.pressure_rec_lbl.SetFont(f)
-            except Exception:
-                pass
-
         self.pressure_lbl.Refresh()
         self.pressure_val_lbl.Refresh()
-        self.pressure_rec_lbl.Refresh()
-
 
 class LanguageTab(wx.Panel):
     def __init__(self, parent):
