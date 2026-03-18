@@ -1801,7 +1801,7 @@ class TrackerTab(wx.Panel):
     def OnCreateSecondRobot(self):
         if self.n_coils >= 2:
             if not hasattr(self, "setup_robot_2"):
-                # self.robot.CreateSecondRobot()
+                self.robot.CreateSecondRobot()
                 robot_index = list(self.robot.GetAllRobots().values())[1]
                 self.setup_robot_2 = SetupRobot(self, robot_index)
                 self.main_sizer.Add(self.setup_robot_2, 0, wx.ALL | wx.EXPAND, 0)
@@ -1817,12 +1817,6 @@ class TrackerTab(wx.Panel):
         self.Layout()
         self.Update()
         # Publisher.sendMessage("Show second robot", state=(self.n_coils >= 2))
-
-    def OnRobotConfigReceived(self, config):
-        # Update GUI checkbox with the actual value
-        use_pressure_sensor = config.get("use_pressure_sensor", False)
-        self.chk_enable_pressure.SetValue(use_pressure_sensor)
-        self._update_pressure_controls_state(self.robot.IsConnected() and use_pressure_sensor)
 
     def OnChooseNoOfCoils(self, evt, ctrl):
         old_n_coils = self.n_coils
@@ -1892,6 +1886,7 @@ class SetupRobot(wx.Panel):
         self.robot_name = self.robot.robot_name
         self.robot_ip = robot.robot_ip
         self.session = ses.Session()
+        self.use_pressure_sensor = self.robot.robot_init_config.get("use_pressure_sensor", False)
 
         self.LoadConfig()
 
@@ -1901,6 +1896,7 @@ class SetupRobot(wx.Panel):
         Publisher.sendMessage(
             "Neuronavigation to Robot: Check connection robot", robot_ID=self.robot_name
         )
+        Publisher.sendMessage("Neuronavigation to Robot: Request config")
 
         self.SetSizerAndFit(self.main_sizer)
         self.Layout()
@@ -2020,11 +2016,6 @@ class SetupRobot(wx.Panel):
 
         self.pressure_slider.Bind(wx.EVT_SLIDER, self.OnPressureSlider)
 
-        if getattr(self.robot, "robot_init_config", None):
-            use_pressure_sensor = self.robot.robot_init_config.get("use_pressure_sensor", False)
-        else:
-            Publisher.sendMessage("Neuronavigation to Robot: Request config")
-
          # quick-set button
         self.btn_set_rec = wx.Button(self, -1, _("Set 10 N"), size=wx.Size(70, 23))
         self.btn_set_rec.SetToolTip(_("Set pressure to the recommended 10 N"))
@@ -2034,7 +2025,7 @@ class SetupRobot(wx.Panel):
         self.chk_enable_pressure.SetToolTip(_("Enable pressure sensor"))
         self.chk_enable_pressure.Bind(wx.EVT_CHECKBOX, self.OnTogglePressureSensor)
         self.chk_enable_pressure.Enable(self.robot.IsConnected())
-        self._update_pressure_controls_state(self.robot.IsConnected() and use_pressure_sensor)
+        self._update_pressure_controls_state(self.robot.IsConnected() and self.use_pressure_sensor)
 
 
         pressure_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -2043,6 +2034,8 @@ class SetupRobot(wx.Panel):
         pressure_row.Add(self.pressure_slider, 1, wx.EXPAND | wx.RIGHT, 6)
         pressure_row.Add(self.pressure_val_lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
         pressure_row.Add(self.btn_set_rec, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        self.pressure_row = pressure_row
 
         rob_static_sizer = wx.StaticBoxSizer(
             wx.VERTICAL, self, _(f"Setup Robot - {self.robot_name}")
@@ -2059,6 +2052,7 @@ class SetupRobot(wx.Panel):
             self.OnSetRobotTransformationMatrix,
             "Neuronavigation to Robot: Set robot transformation matrix",
         )
+        Publisher.subscribe(self.OnRobotConfigReceived, "Robot to Neuronavigation: Initial config")
 
     def LoadConfig(self):
         session = ses.Session()
@@ -2167,11 +2161,8 @@ class SetupRobot(wx.Panel):
             self.status_text.SetLabelText(_("Setup robot transformation matrix:"))
             self.btn_rob_con.Show()
             self.chk_enable_pressure.Enable(True)
-            self.chk_enable_pressure.SetValue(
-                self.robot.robot_init_config.get("use_pressure_sensor", False)
-            )
+            self.chk_enable_pressure.SetValue(self.use_pressure_sensor)
             self._update_pressure_controls_state(self.chk_enable_pressure.GetValue())
-            self.Layout()
 
             if (
                 self.robot.robot_ip not in self.robot.robot_ip_options
@@ -2187,6 +2178,12 @@ class SetupRobot(wx.Panel):
             self.chk_enable_pressure.Enable(False)
             self._update_pressure_controls_state(False)
 
+        self.Layout()
+        self.Fit()
+        if self.GetParent():
+            self.GetParent().Layout()
+            self.GetParent().Refresh()
+
     def OnSetRobotTransformationMatrix(self, data, robot_ID):
         if robot_ID != self.robot.robot_name:
             return
@@ -2194,8 +2191,26 @@ class SetupRobot(wx.Panel):
             self.status_text.SetLabelText("Robot is fully setup!")
             self.btn_rob_con.SetLabel("Register Again")
             self.btn_rob_con.Show()
-            self.btn_rob_con.Layout()
-            self.Parent.Update()
+
+            self.Layout()
+            self.Fit()
+            if self.GetParent():
+                self.GetParent().Layout()
+                self.GetParent().Refresh()
+
+    def OnRobotConfigReceived(self, config, robot_ID=None):
+        if robot_ID is not None and robot_ID != self.robot_name:
+            return
+        # Update GUI checkbox with the actual value
+        self.use_pressure_sensor = config.get("use_pressure_sensor", False)
+        self.chk_enable_pressure.SetValue(self.use_pressure_sensor)
+        self._update_pressure_controls_state(self.robot.IsConnected() and self.use_pressure_sensor)
+
+        self.Layout()
+        self.Fit()
+        if self.GetParent():
+            self.GetParent().Layout()
+            self.GetParent().Refresh()
 
     def GetRobotIP(self):
         return self.robot_ip
@@ -2271,6 +2286,12 @@ class SetupRobot(wx.Panel):
 
         self.pressure_lbl.Refresh()
         self.pressure_val_lbl.Refresh()
+
+        self.Layout()
+        self.Fit()
+        if self.GetParent():
+            self.GetParent().Layout()
+            self.GetParent().Refresh()
 
     def OnTogglePressureSensor(self, evt):
         if not self.robot.robot_init_config:

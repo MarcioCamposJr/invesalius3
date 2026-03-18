@@ -1998,7 +1998,7 @@ class ControlPanel(wx.Panel):
 
         # sizers
         start_navigation_button_sizer = wx.BoxSizer(wx.VERTICAL)
-        start_navigation_button_sizer.AddMany([(btn_nav, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.RIGHT, 15)])
+        start_navigation_button_sizer.AddMany([(btn_nav, 0, wx.ALIGN_CENTER_HORIZONTAL)])
 
         # Navigation buttons grid — all children of scroll_panel
         navigation_buttons_sizer = wx.FlexGridSizer(rows=3, cols=4, vgap=3, hgap=3)
@@ -2249,13 +2249,13 @@ class ControlPanel(wx.Panel):
     def ShowSecondRobotButtons(self, state=True):
         # self._create_toggle_robot_button()
         list_robot_id = list(self.robot_buttons_panel.keys())
-        # if len(list_robot_id) > 1:
-        robot_panel = self.robot_buttons_panel[list_robot_id[1]]
-        robot_panel.Show(state)
-        self.scroll_panel.FitInside()
-        self.scroll_panel.SetupScrolling(scroll_x=False, scroll_y=True)
-        self.Layout()
-        # self.SetSizerAndFit(self.sizer)
+        if len(list_robot_id) > 1:
+            robot_panel = self.robot_buttons_panel[list_robot_id[1]]
+            robot_panel.Show(state)
+            self.scroll_panel.FitInside()
+            self.scroll_panel.SetupScrolling(scroll_x=False, scroll_y=True)
+            self.Layout()
+            self.SetSizerAndFit(self.sizer)
 
     # Toggle Button Helpers
     def UpdateToggleButton(self, ctrl, state=None):

@@ -67,10 +67,10 @@ class Robot:
         self.matrix_tracker_to_robot = None
         self.robot_coregistration_dialog = None
         self.target = None
-        self.robot_init_config = None
+        self.robot_init_config = {}
 
         self.objective = RobotObjective.NONE
-        self.target = None
+
 
         # If tracker already has fiducials set, send them to the robot; this can happen, e.g.,
         # when a pre-existing state is loaded at start-up.
@@ -87,8 +87,8 @@ class Robot:
     def __bind_events(self):
         Publisher.subscribe(self.SetTarget, "Set target")
         Publisher.subscribe(self.UnsetTarget, "Unset target")
-
         Publisher.subscribe(self.TrackerFiducialsSet, "Tracker fiducials set")
+        Publisher.subscribe(self.OnRobotInitialConfig, "Robot to Neuronavigation: Initial config")
 
     def SaveIpConfig(self):
         session = ses.Session()
@@ -120,9 +120,9 @@ class Robot:
         self.coil_name = state.get("robot_coil", None)
         self.robot_ip = state.get("robot_ip", None)
 
-        self.matrix_tracker_to_robot = state.get("tracker_to_robot", None)
-        if self.matrix_tracker_to_robot is not None:
-            self.matrix_tracker_to_robot = np.array(self.matrix_tracker_to_robot)
+        matrix_tracker_to_robot = state.get("tracker_to_robot", None)
+        if matrix_tracker_to_robot is not None:
+            self.matrix_tracker_to_robot = np.array(matrix_tracker_to_robot)
 
         self.robot_ip_options = session.GetConfig("robot_ip_options", [])
 
@@ -215,7 +215,7 @@ class Robot:
             robot_IP=self.robot_ip,
             robot_ID=self.robot_name,
         )
-        pressure_setpoint = ses.Session().GetConfig("pressure_setpoint", 5.0)
+        pressure_setpoint = ses.Session().GetConfig("pressure_setpoint", 10.0)
         Publisher.sendMessage(
             "Neuronavigation to Robot: Pressure set point", pressure=pressure_setpoint, robot_ID=self.robot_name
         )
@@ -323,6 +323,7 @@ class Robot:
             target=m_target.tolist(),
             robot_ID=self.robot_name,
         )
+        print("Teste 4")
 
     def TrackerFiducialsSet(self):
         tracker_fiducials = self.tracker.GetMatrixTrackerFiducials()
@@ -363,7 +364,9 @@ class Robot:
             Publisher.sendMessage("Press robot button", pressed=False, robot_ID=self.robot_name)
             Publisher.sendMessage("Press move away button", pressed=False, robot_ID=self.robot_name)
 
-    def OnRobotInitialConfig(self, config):
+    def OnRobotInitialConfig(self, config, robot_ID = None):
+        if robot_ID != self.robot_name:
+            return
         self.robot_init_config = config
 
     def UnsetTarget(self, marker, robot_ID):
@@ -373,6 +376,7 @@ class Robot:
         Publisher.sendMessage("Neuronavigation to Robot: Unset target", robot_ID=self.robot_name)
 
     def SetTarget(self, marker, robot_ID):
+        print("Chegou target")
         if robot_ID != self.robot_name or not self.IsConnected():
             return
         coord = marker.position + marker.orientation
@@ -396,13 +400,12 @@ class Robots(metaclass=Singleton):
         # TODO: optimize the dynamic creation of second robot
         self._robots = {
             "robot_1": Robot("robot_1", tracker, navigation, icp),
-            "robot_2": Robot("robot_2", tracker, navigation, icp),
         }
         self.active = "robot_1"  # Default active robot
         self.RobotCoilAssociation = {}
         self.BallCreated = False
 
-        self.distance_coils = 0.0
+        self.distance_coils = None
         self.brake_vector = {}
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
