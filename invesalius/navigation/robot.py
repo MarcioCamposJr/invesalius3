@@ -154,7 +154,6 @@ class Robot:
         if data == "Connected":
             self.is_robot_connected = True
 
-        if self.is_robot_connected:
             Publisher.sendMessage("Enable move away button", enabled=True, robot_ID=self.robot_name)
             Publisher.sendMessage(
                 "Enable free drive button", enabled=True, robot_ID=self.robot_name
@@ -287,7 +286,7 @@ class Robot:
 
     def SendTargetToRobot(self):
         # If the target is not set, return early.
-        if self.target is None:
+        if self.target is None or not self.IsConnected():
             return False
 
         navigation = self.navigation
@@ -323,7 +322,6 @@ class Robot:
             target=m_target.tolist(),
             robot_ID=self.robot_name,
         )
-        print("Teste 4")
 
     def TrackerFiducialsSet(self):
         tracker_fiducials = self.tracker.GetMatrixTrackerFiducials()
@@ -376,8 +374,7 @@ class Robot:
         Publisher.sendMessage("Neuronavigation to Robot: Unset target", robot_ID=self.robot_name)
 
     def SetTarget(self, marker, robot_ID):
-        print("Chegou target")
-        if robot_ID != self.robot_name or not self.IsConnected():
+        if robot_ID != self.robot_name:
             return
         coord = marker.position + marker.orientation
 

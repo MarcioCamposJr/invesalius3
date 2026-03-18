@@ -2582,6 +2582,9 @@ class ControlPanel(wx.Panel):
     def OnSimultaneousButton(self, evt=None, ctrl=None):
         enabled = ctrl.GetValue()
         if enabled:
+
+            Publisher.sendMessage("Reset targets")
+
             self.simultaneous_mode_button.Enable(True)
             coil_names_options = (
                 list(self.navigation.coil_registrations)
@@ -2630,7 +2633,6 @@ class ControlPanel(wx.Panel):
             self.lock_to_target_button.Show(True)
             self.Layout()
 
-        Publisher.sendMessage("Reset targets")
         Publisher.sendMessage(
             "Set simultaneous multicoil mode",
             state=enabled,

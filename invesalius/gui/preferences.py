@@ -527,6 +527,54 @@ class NavigationTab(wx.Panel):
         self.colormaps = [str(cmap) for cmap in const.MEP_COLORMAP_DEFINITIONS.keys()]
         self.number_colors = 4
 
+    def SetAllow(self, evt, ctrl):
+        print(self.with_target)
+        if not self.with_target:
+            ctrl.SetSelection(-1)
+            print(f"No target associated")
+            return
+
+        choice = evt.GetSelection()
+
+        if choice == 1:
+            print(f"Selected mode: {choice}")
+            self.navigation.SetLockToTarget(True)
+        elif choice == 0:
+            print(f"Selected mode: {choice}")
+            self.navigation.SetLockToTarget(False)
+        else:
+            print(f"Selected mode: None")
+
+        ctrl.SetSelection(choice)
+
+    def SetSerialPort(self, evt):
+        from wx import ID_OK
+
+        dlg_port = dlg.SetCOMPort(select_baud_rate=False)
+
+        if dlg_port.ShowModal() != ID_OK:
+            return
+
+        com_port = dlg_port.GetCOMPort()
+        baud_rate = 115200
+
+        Publisher.sendMessage(
+            "Update serial port",
+            serial_port_in_use=True,
+            com_port=com_port,
+            baud_rate=baud_rate,
+        )
+
+    def TakeTarget(self, marker, robot_ID):
+        self.with_target = True
+
+    def ReleaseTarget(self, marker, robot_ID):
+        self.with_target = False
+
+    def __bind_events(self):
+        Publisher.subscribe(self.TakeTarget, "Set target")
+        Publisher.subscribe(self.ReleaseTarget, "Unset target")
+
     def GetSelection(self):
         options = {
             const.LANDMARK_MARKER_SHAPE: self.rb_landmark_shape.GetSelection(),
@@ -925,343 +973,6 @@ class NavigationTab(wx.Panel):
             surface_index=self.combo_brain_surface_name.GetSelection(),
             colour=colour,
         )
-
-
-class LoggingTab(wx.Panel):
-    def __init__(self, parent):
-        wx.Panel.__init__(self, parent)
-
-        # File Logging Selection
-        bsizer_logging = wx.StaticBoxSizer(wx.VERTICAL, self, _("File Logging Options"))
-
-        bsizer_file_logging = wx.BoxSizer(wx.HORIZONTAL)
-
-        rb_file_logging = self.rb_file_logging = wx.RadioBox(
-            self,
-            -1,
-            label="Do Logging",
-            choices=["No", "Yes"],
-            majorDimension=2,
-            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
-        )
-        bsizer_file_logging.Add(rb_file_logging, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
-
-        rb_append_file = self.rb_append_file = wx.RadioBox(
-            self,  # bsizer_file_logging.GetStaticBox(),
-            -1,
-            label="Append File",
-            choices=["No", "Yes"],
-            majorDimension=2,
-            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
-        )
-
-        lbl_file_logging_level = wx.StaticText(self, -1, _(" Logging Level "))
-        cb_file_logging_level = self.cb_file_logging_level = wx.Choice(
-            self,
-            -1,
-            name="Logging Level",
-            choices=const.LOGGING_LEVEL_TYPES,
-        )
-        bsizer_file_logging.Add(rb_append_file, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
-        bsizer_file_logging.Add(lbl_file_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
-        bsizer_file_logging.Add(cb_file_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
-
-        bsizer_logging.Add(bsizer_file_logging, 0, wx.TOP | wx.LEFT | wx.EXPAND, 0)
-
-        bsizer_log_filename = wx.BoxSizer(wx.HORIZONTAL)
-
-        lbl_log_file_label = wx.StaticText(self, -1, _("File:"))
-        tc_log_file_name = self.tc_log_file_name = wx.TextCtrl(
-            self, -1, "", style=wx.TE_READONLY | wx.TE_LEFT, size=(300, -1)
-        )
-        tc_log_file_name.SetForegroundColour(wx.BLUE)
-        bt_log_file_select = wx.Button(self, label="Modify")  # bsizer_file_logging.GetStaticBox()
-        bt_log_file_select.Bind(wx.EVT_BUTTON, self.OnModifyButton)
-        bsizer_log_filename.Add(
-            lbl_log_file_label, 0, wx.TOP | wx.LEFT, 0
-        )  # | wx.FIXED_MINSIZE, 0)
-        bsizer_log_filename.Add(tc_log_file_name, 0, wx.TOP | wx.LEFT, 0)  # | wx.FIXED_MINSIZE, 0)
-        bsizer_log_filename.Add(
-            bt_log_file_select, 0, wx.TOP | wx.LEFT, 0
-        )  # | wx.FIXED_MINSIZE, 0)
-        bsizer_logging.Add(bsizer_log_filename, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 0)
-
-        # Console Logging Selection
-        bsizer_console_logging = wx.StaticBoxSizer(
-            wx.HORIZONTAL, self, _(" Console Logging Options")
-        )
-
-        rb_console_logging = self.rb_console_logging = wx.RadioBox(
-            bsizer_console_logging.GetStaticBox(),
-            -1,
-            label="Do logging",
-            choices=["No", "Yes"],
-            majorDimension=2,
-            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
-        )
-        bsizer_console_logging.Add(rb_console_logging, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
-        lbl_console_logging_level = wx.StaticText(
-            bsizer_console_logging.GetStaticBox(), -1, _(" Logging Level ")
-        )
-        cb_console_logging_level = self.cb_console_logging_level = wx.Choice(
-            bsizer_console_logging.GetStaticBox(),
-            -1,
-            choices=const.LOGGING_LEVEL_TYPES,
-        )
-        bsizer_console_logging.Add(
-            lbl_console_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5
-        )
-        bsizer_console_logging.Add(
-            cb_console_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5
-        )
-
-        border = wx.BoxSizer(wx.VERTICAL)
-        border.Add(bsizer_logging, 1, wx.EXPAND | wx.ALL, 10)  # | wx.FIXED_MINSIZE, 10)
-        border.Add(bsizer_console_logging, 1, wx.EXPAND | wx.ALL, 10)  # | wx.FIXED_MINSIZE, 10)
-        self.SetSizerAndFit(border)
-
-        self.Layout()
-
-    @log.call_tracking_decorator
-    def OnModifyButton(self, e):
-        logging_file = self.tc_log_file_name.GetValue()
-        path, fname = os.path.split(logging_file)
-        dlg = wx.FileDialog(
-            self,
-            message="Save Log Contents",
-            defaultDir=path,  # os.getcwd(),
-            defaultFile=fname,  # default_file,
-            wildcard="Log files (*.log)|*.log",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
-        )
-        if dlg.ShowModal() == wx.ID_CANCEL:
-            dlg.Destroy()
-            return False
-
-        file_path = dlg.GetPath()
-        self.tc_log_file_name.SetValue(file_path)
-        dlg.Destroy()
-        return True
-
-    def GetSelection(self):
-        options = {
-            const.FILE_LOGGING: self.rb_file_logging.GetSelection(),
-            const.FILE_LOGGING_LEVEL: self.cb_file_logging_level.GetSelection(),
-            const.APPEND_LOG_FILE: self.rb_append_file.GetSelection(),
-            const.LOGFILE: self.tc_log_file_name.GetValue(),
-            const.CONSOLE_LOGGING: self.rb_console_logging.GetSelection(),
-            const.CONSOLE_LOGGING_LEVEL: self.cb_console_logging_level.GetSelection(),
-        }
-        # session = ses.Session()
-        # logger = log.MyLogger()
-
-        file_logging = self.rb_file_logging.GetSelection()
-        log.invLogger.SetConfig("file_logging", file_logging)
-        file_logging_level = self.cb_file_logging_level.GetSelection()
-        log.invLogger.SetConfig("file_logging_level", file_logging_level)
-        append_log_file = self.rb_append_file.GetSelection()
-        log.invLogger.SetConfig("append_log_file", append_log_file)
-        logging_file = self.tc_log_file_name.GetValue()
-        log.invLogger.SetConfig("logging_file", logging_file)
-        console_logging = self.rb_console_logging.GetSelection()
-        log.invLogger.SetConfig("console_logging", console_logging)
-        console_logging_level = self.cb_console_logging_level.GetSelection()
-        log.invLogger.SetConfig("console_logging_level", console_logging_level)
-        log.invLogger.configureLogging()
-
-        return options
-
-    def LoadSelection(self, values):
-        file_logging = values[const.FILE_LOGGING]
-        file_logging_level = values[const.FILE_LOGGING_LEVEL]
-        append_log_file = values[const.APPEND_LOG_FILE]
-        logging_file = values[const.LOGFILE]
-        console_logging = values[const.CONSOLE_LOGGING]
-        console_logging_level = values[const.CONSOLE_LOGGING_LEVEL]
-
-        self.rb_file_logging.SetSelection(int(file_logging))
-        self.cb_file_logging_level.SetSelection(int(file_logging_level))
-        self.rb_append_file.SetSelection(int(append_log_file))
-        self.tc_log_file_name.SetValue(logging_file)
-        self.rb_console_logging.SetSelection(int(console_logging))
-        self.cb_console_logging_level.SetSelection(int(console_logging_level))
-
-
-class NavigationTab(wx.Panel):
-    def __init__(self, parent, navigation):
-        wx.Panel.__init__(self, parent)
-
-        self.session = ses.Session()
-        self.navigation = navigation
-        self.sleep_nav = self.navigation.sleep_nav
-        self.sleep_coord = const.SLEEP_COORDINATES
-        self.with_target = False
-
-        self.LoadConfig()
-        self.__bind_events()
-
-        text_note = wx.StaticText(
-            self, -1, _("Note: Using too low sleep times can result in Invesalius crashing!")
-        )
-        # Change sleep pause between navigation loops
-        nav_sleep = wx.StaticText(self, -1, _("Navigation Sleep (s):"))
-        spin_nav_sleep = wx.SpinCtrlDouble(self, -1, "", size=wx.Size(50, 23), inc=0.01)
-        spin_nav_sleep.Enable(1)
-        spin_nav_sleep.SetRange(0.01, 10.0)
-        spin_nav_sleep.SetValue(self.sleep_nav)
-        spin_nav_sleep.Bind(wx.EVT_TEXT, partial(self.OnSelectNavSleep, ctrl=spin_nav_sleep))
-        spin_nav_sleep.Bind(wx.EVT_SPINCTRL, partial(self.OnSelectNavSleep, ctrl=spin_nav_sleep))
-
-        # Change sleep pause between coordinate update
-        coord_sleep = wx.StaticText(self, -1, _("Coordinate Sleep (s):"))
-        spin_coord_sleep = wx.SpinCtrlDouble(self, -1, "", size=wx.Size(50, 23), inc=0.01)
-        spin_coord_sleep.Enable(1)
-        spin_coord_sleep.SetRange(0.01, 10.0)
-        spin_coord_sleep.SetValue(self.sleep_coord)
-        spin_coord_sleep.Bind(wx.EVT_TEXT, partial(self.OnSelectCoordSleep, ctrl=spin_coord_sleep))
-        spin_coord_sleep.Bind(
-            wx.EVT_SPINCTRL, partial(self.OnSelectCoordSleep, ctrl=spin_coord_sleep)
-        )
-
-        line_nav_sleep = wx.BoxSizer(wx.HORIZONTAL)
-        line_nav_sleep.AddMany(
-            [
-                (nav_sleep, 1, wx.EXPAND | wx.GROW | wx.TOP | wx.RIGHT | wx.LEFT, 5),
-                (spin_nav_sleep, 0, wx.ALL | wx.EXPAND | wx.GROW, 5),
-            ]
-        )
-
-        line_coord_sleep = wx.BoxSizer(wx.HORIZONTAL)
-        line_coord_sleep.AddMany(
-            [
-                (coord_sleep, 1, wx.EXPAND | wx.GROW | wx.TOP | wx.RIGHT | wx.LEFT, 5),
-                (spin_coord_sleep, 0, wx.ALL | wx.EXPAND | wx.GROW, 5),
-            ]
-        )
-
-        # Add line sizers into main sizer
-        conf_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, _("Sleep time configuration"))
-        conf_sizer.AddMany(
-            [
-                (text_note, 0, wx.ALL, 10),
-                (line_nav_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
-                (line_coord_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
-            ]
-        )
-
-        btn_serial_port = wx.Button(self, -1, _("Serial Port"))
-        btn_serial_port.SetToolTip(_("Select your COM port to connect"))
-        btn_serial_port.Bind(wx.EVT_BUTTON, self.SetSerialPort)
-
-        # ComboBox
-        options = ["yes", "no"]
-        select_options = wx.ComboBox(
-            self,
-            -1,
-            "",
-            size=(145, -1),
-            choices=options,
-            style=wx.CB_DROPDOWN | wx.CB_READONLY,
-        )
-        tooltip = _("Choose if you want to allow trigger when coil at target:")
-        select_options.SetToolTip(tooltip)
-        select_options.SetSelection(-1)
-        select_options.Bind(wx.EVT_COMBOBOX, partial(self.SetAllow, ctrl=select_options))
-
-        op_label = wx.StaticText(self, -1, _("Choose the number of coils to track:"))
-
-        trigger_conf_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, _("Serial port configuration"))
-        trigger_conf_sizer.AddMany(
-            [
-                # (line_nav_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
-                # (line_coord_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
-                (btn_serial_port, 0, wx.CENTER, 5),
-                (op_label, 0, wx.CENTER, 5),
-                (select_options, 0, wx.CENTER, 5),
-            ]
-        )
-
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.AddMany(
-            [
-                (conf_sizer, 0, wx.ALL | wx.EXPAND, 10),
-                (trigger_conf_sizer, 0, wx.EXPAND | wx.LEFT, 10),
-            ]
-        )
-        self.SetSizerAndFit(main_sizer)
-        self.Layout()
-
-    def SetAllow(self, evt, ctrl):
-        print(self.with_target)
-        if not self.with_target:
-            ctrl.SetSelection(-1)
-            print(f"No target associated")
-            return
-
-        choice = evt.GetSelection()
-
-        if choice == 1:
-            print(f"Selected mode: {choice}")
-            self.navigation.SetLockToTarget(True)
-        elif choice == 0:
-            print(f"Selected mode: {choice}")
-            self.navigation.SetLockToTarget(False)
-        else:
-            print(f"Selected mode: None")
-
-        ctrl.SetSelection(choice)
-
-    def SetSerialPort(self, evt):
-        from wx import ID_OK
-
-        dlg_port = dlg.SetCOMPort(select_baud_rate=False)
-
-        if dlg_port.ShowModal() != ID_OK:
-            return
-
-        com_port = dlg_port.GetCOMPort()
-        baud_rate = 115200
-
-        Publisher.sendMessage(
-            "Update serial port",
-            serial_port_in_use=True,
-            com_port=com_port,
-            baud_rate=baud_rate,
-        )
-        # else:
-        #    Publisher.sendMessage("Update serial port", serial_port_in_use=False)
-
-    def OnSelectNavSleep(self, evt, ctrl):
-        self.sleep_nav = ctrl.GetValue()
-        self.navigation.UpdateNavSleep(self.sleep_nav)
-
-        self.session.SetConfig("sleep_nav", self.sleep_nav)
-
-    def OnSelectCoordSleep(self, evt, ctrl):
-        self.sleep_coord = ctrl.GetValue()
-        Publisher.sendMessage("Update coord sleep", data=self.sleep_coord)
-
-        self.session.SetConfig("sleep_coord", self.sleep_nav)
-
-    def LoadConfig(self):
-        sleep_nav = self.session.GetConfig("sleep_nav")
-        sleep_coord = self.session.GetConfig("sleep_coord")
-
-        if sleep_nav is not None:
-            self.sleep_nav = sleep_nav
-
-        if sleep_coord is not None:
-            self.sleep_coord = sleep_coord
-
-    def TakeTarget(self, marker, robot_ID):
-        self.with_target = True
-
-    def ReleaseTarget(self, marker, robot_ID):
-        self.with_target = False
-
-    def __bind_events(self):
-        Publisher.subscribe(self.TakeTarget, "Set target")
-        Publisher.subscribe(self.ReleaseTarget, "Unset target")
 
 
 class ObjectTab(wx.Panel):
