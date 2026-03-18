@@ -569,7 +569,7 @@ class Robots(metaclass=Singleton):
             )
 
     def CreateSecondRobot(self):
-        if self._robots["robot_2"] is None:
+        if "robot_2" not in self._robots:
             self._robots["robot_2"] = Robot("robot_2", self.tracker, self.navigation, self.icp)
             print("Second robot created")
         return self._robots["robot_2"]
