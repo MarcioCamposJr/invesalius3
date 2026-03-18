@@ -114,6 +114,11 @@ class Preferences(wx.Dialog):
         values.update(lang)
         values.update(viewer)
 
+        # Add navigation tab preferences (includes marker shapes)
+        if hasattr(self, "navigation_tab"):
+            nav = self.navigation_tab.GetSelection()
+            values.update(nav)
+
         if self.have_log_tab == 1:
             logging = self.logging_tab.GetSelection()
             values.update(logging)
@@ -128,6 +133,10 @@ class Preferences(wx.Dialog):
         # Must invert value as GUI returns 0 for Yes and 1 for No
         slice_interpolation = not bool(session.GetConfig("slice_interpolation"))
 
+        # Marker shapes (default to ball for both)
+        landmark_marker_shape = session.GetConfig("landmark_marker_shape", const.MARKER_SHAPE_BALL)
+        fiducial_marker_shape = session.GetConfig("fiducial_marker_shape", const.MARKER_SHAPE_CROSS)
+
         # logger = log.MyLogger()
         file_logging = log.invLogger.GetConfig("file_logging")
         file_logging_level = log.invLogger.GetConfig("file_logging_level")
@@ -141,6 +150,8 @@ class Preferences(wx.Dialog):
             const.SURFACE_INTERPOLATION: surface_interpolation,
             const.LANGUAGE: language,
             const.SLICE_INTERPOLATION: slice_interpolation,
+            const.LANDMARK_MARKER_SHAPE: landmark_marker_shape,
+            const.FIDUCIAL_MARKER_SHAPE: fiducial_marker_shape,
             const.FILE_LOGGING: file_logging,
             const.FILE_LOGGING_LEVEL: file_logging_level,
             const.APPEND_LOG_FILE: append_log_file,
@@ -151,6 +162,8 @@ class Preferences(wx.Dialog):
 
         self.visualization_tab.LoadSelection(values)
         self.language_tab.LoadSelection(values)
+        if hasattr(self, "navigation_tab"):
+            self.navigation_tab.LoadSelection(values)
         if self.have_log_tab == 1:
             self.logging_tab.LoadSelection(values)
 
@@ -160,17 +173,6 @@ class VisualizationTab(wx.Panel):
         wx.Panel.__init__(self, parent)
 
         self.session = ses.Session()
-
-        self.colormaps = [str(cmap) for cmap in const.MEP_COLORMAP_DEFINITIONS.keys()]
-        self.number_colors = 4
-        self.cluster_volume = None
-
-        self.conf = self.session.GetConfig("mep_configuration")
-        try:
-            self.conf = dict(self.conf)
-        except TypeError:
-            self.conf = {}
-        self.conf["mep_colormap"] = self.conf.get("mep_colormap", "Viridis")
 
         bsizer = wx.StaticBoxSizer(wx.VERTICAL, self, _("3D Visualization"))
         lbl_inter = wx.StaticText(bsizer.GetStaticBox(), -1, _("Surface Interpolation "))
@@ -213,11 +215,6 @@ class VisualizationTab(wx.Panel):
         border.Add(bsizer_slices, 0, wx.EXPAND | wx.ALL | wx.FIXED_MINSIZE, 10)
         border.Add(bsizer, 1, wx.EXPAND | wx.ALL | wx.FIXED_MINSIZE, 10)
 
-        # Creating MEP Mapping BoxSizer
-        if self.conf.get("mep_enabled") is True:
-            self.bsizer_mep = self.InitMEPMapping(None)
-            border.Add(self.bsizer_mep, 0, wx.EXPAND | wx.ALL | wx.FIXED_MINSIZE, 10)
-
         self.SetSizerAndFit(border)
         self.Layout()
 
@@ -230,6 +227,318 @@ class VisualizationTab(wx.Panel):
             ),  # 0 for Yes, 1 for No
         }
         return options
+
+    def LoadSelection(self, values):
+        rendering = values[const.RENDERING]
+        surface_interpolation = values[const.SURFACE_INTERPOLATION]
+        slice_interpolation = values[const.SLICE_INTERPOLATION]
+
+        self.rb_rendering.SetSelection(int(rendering))
+        self.rb_inter.SetSelection(int(surface_interpolation))
+        self.rb_inter_sl.SetSelection(int(slice_interpolation))
+
+
+class LoggingTab(wx.Panel):
+    def __init__(self, parent):
+        wx.Panel.__init__(self, parent)
+
+        # File Logging Selection
+        bsizer_logging = wx.StaticBoxSizer(wx.VERTICAL, self, _("File Logging Options"))
+
+        bsizer_file_logging = wx.BoxSizer(wx.HORIZONTAL)
+
+        rb_file_logging = self.rb_file_logging = wx.RadioBox(
+            self,
+            -1,
+            label="Do Logging",
+            choices=["No", "Yes"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
+        )
+        bsizer_file_logging.Add(rb_file_logging, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
+
+        rb_append_file = self.rb_append_file = wx.RadioBox(
+            self,  # bsizer_file_logging.GetStaticBox(),
+            -1,
+            label="Append File",
+            choices=["No", "Yes"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
+        )
+
+        lbl_file_logging_level = wx.StaticText(self, -1, _(" Logging Level "))
+        cb_file_logging_level = self.cb_file_logging_level = wx.Choice(
+            self,
+            -1,
+            name="Logging Level",
+            choices=const.LOGGING_LEVEL_TYPES,
+        )
+        bsizer_file_logging.Add(rb_append_file, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
+        bsizer_file_logging.Add(lbl_file_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
+        bsizer_file_logging.Add(cb_file_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
+
+        bsizer_logging.Add(bsizer_file_logging, 0, wx.TOP | wx.LEFT | wx.EXPAND, 0)
+
+        bsizer_log_filename = wx.BoxSizer(wx.HORIZONTAL)
+
+        lbl_log_file_label = wx.StaticText(self, -1, _("File:"))
+        tc_log_file_name = self.tc_log_file_name = wx.TextCtrl(
+            self, -1, "", style=wx.TE_READONLY | wx.TE_LEFT, size=(300, -1)
+        )
+        tc_log_file_name.SetForegroundColour(wx.BLUE)
+        bt_log_file_select = wx.Button(self, label="Modify")  # bsizer_file_logging.GetStaticBox()
+        bt_log_file_select.Bind(wx.EVT_BUTTON, self.OnModifyButton)
+        bsizer_log_filename.Add(
+            lbl_log_file_label, 0, wx.TOP | wx.LEFT, 0
+        )  # | wx.FIXED_MINSIZE, 0)
+        bsizer_log_filename.Add(tc_log_file_name, 0, wx.TOP | wx.LEFT, 0)  # | wx.FIXED_MINSIZE, 0)
+        bsizer_log_filename.Add(
+            bt_log_file_select, 0, wx.TOP | wx.LEFT, 0
+        )  # | wx.FIXED_MINSIZE, 0)
+        bsizer_logging.Add(bsizer_log_filename, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 0)
+
+        # Console Logging Selection
+        bsizer_console_logging = wx.StaticBoxSizer(
+            wx.HORIZONTAL, self, _(" Console Logging Options")
+        )
+
+        rb_console_logging = self.rb_console_logging = wx.RadioBox(
+            bsizer_console_logging.GetStaticBox(),
+            -1,
+            label="Do logging",
+            choices=["No", "Yes"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER | wx.FIXED_MINSIZE,
+        )
+        bsizer_console_logging.Add(rb_console_logging, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5)
+        lbl_console_logging_level = wx.StaticText(
+            bsizer_console_logging.GetStaticBox(), -1, _(" Logging Level ")
+        )
+        cb_console_logging_level = self.cb_console_logging_level = wx.Choice(
+            bsizer_console_logging.GetStaticBox(),
+            -1,
+            choices=const.LOGGING_LEVEL_TYPES,
+        )
+        bsizer_console_logging.Add(
+            lbl_console_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5
+        )
+        bsizer_console_logging.Add(
+            cb_console_logging_level, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 5
+        )
+
+        border = wx.BoxSizer(wx.VERTICAL)
+        border.Add(bsizer_logging, 1, wx.EXPAND | wx.ALL, 10)  # | wx.FIXED_MINSIZE, 10)
+        border.Add(bsizer_console_logging, 1, wx.EXPAND | wx.ALL, 10)  # | wx.FIXED_MINSIZE, 10)
+        self.SetSizerAndFit(border)
+
+        self.Layout()
+
+    @log.call_tracking_decorator
+    def OnModifyButton(self, e):
+        logging_file = self.tc_log_file_name.GetValue()
+        path, fname = os.path.split(logging_file)
+        dlg = wx.FileDialog(
+            self,
+            message="Save Log Contents",
+            defaultDir=path,  # os.getcwd(),
+            defaultFile=fname,  # default_file,
+            wildcard="Log files (*.log)|*.log",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() == wx.ID_CANCEL:
+            dlg.Destroy()
+            return False
+
+        file_path = dlg.GetPath()
+        self.tc_log_file_name.SetValue(file_path)
+        dlg.Destroy()
+        return True
+
+    def GetSelection(self):
+        options = {
+            const.FILE_LOGGING: self.rb_file_logging.GetSelection(),
+            const.FILE_LOGGING_LEVEL: self.cb_file_logging_level.GetSelection(),
+            const.APPEND_LOG_FILE: self.rb_append_file.GetSelection(),
+            const.LOGFILE: self.tc_log_file_name.GetValue(),
+            const.CONSOLE_LOGGING: self.rb_console_logging.GetSelection(),
+            const.CONSOLE_LOGGING_LEVEL: self.cb_console_logging_level.GetSelection(),
+        }
+        # session = ses.Session()
+        # logger = log.MyLogger()
+
+        file_logging = self.rb_file_logging.GetSelection()
+        log.invLogger.SetConfig("file_logging", file_logging)
+        file_logging_level = self.cb_file_logging_level.GetSelection()
+        log.invLogger.SetConfig("file_logging_level", file_logging_level)
+        append_log_file = self.rb_append_file.GetSelection()
+        log.invLogger.SetConfig("append_log_file", append_log_file)
+        logging_file = self.tc_log_file_name.GetValue()
+        log.invLogger.SetConfig("logging_file", logging_file)
+        console_logging = self.rb_console_logging.GetSelection()
+        log.invLogger.SetConfig("console_logging", console_logging)
+        console_logging_level = self.cb_console_logging_level.GetSelection()
+        log.invLogger.SetConfig("console_logging_level", console_logging_level)
+        log.invLogger.configureLogging()
+
+        return options
+
+    def LoadSelection(self, values):
+        file_logging = values[const.FILE_LOGGING]
+        file_logging_level = values[const.FILE_LOGGING_LEVEL]
+        append_log_file = values[const.APPEND_LOG_FILE]
+        logging_file = values[const.LOGFILE]
+        console_logging = values[const.CONSOLE_LOGGING]
+        console_logging_level = values[const.CONSOLE_LOGGING_LEVEL]
+
+        self.rb_file_logging.SetSelection(int(file_logging))
+        self.cb_file_logging_level.SetSelection(int(file_logging_level))
+        self.rb_append_file.SetSelection(int(append_log_file))
+        self.tc_log_file_name.SetValue(logging_file)
+        self.rb_console_logging.SetSelection(int(console_logging))
+        self.cb_console_logging_level.SetSelection(int(console_logging_level))
+
+
+class NavigationTab(wx.Panel):
+    def __init__(self, parent, navigation):
+        wx.Panel.__init__(self, parent)
+
+        self.session = ses.Session()
+        self.navigation = navigation
+        self.sleep_nav = self.navigation.sleep_nav
+        self.sleep_coord = const.SLEEP_COORDINATES
+
+        self.LoadConfig()
+
+        text_note = wx.StaticText(
+            self, -1, _("Note: Using too low sleep times can result in Invesalius crashing!")
+        )
+        # Change sleep pause between navigation loops
+        nav_sleep = wx.StaticText(self, -1, _("Navigation Sleep (s):"))
+        spin_nav_sleep = wx.SpinCtrlDouble(self, -1, "", size=wx.Size(50, 23), inc=0.01)
+        spin_nav_sleep.Enable(1)
+        spin_nav_sleep.SetRange(0.01, 10.0)
+        spin_nav_sleep.SetValue(self.sleep_nav)
+        spin_nav_sleep.Bind(wx.EVT_TEXT, partial(self.OnSelectNavSleep, ctrl=spin_nav_sleep))
+        spin_nav_sleep.Bind(wx.EVT_SPINCTRL, partial(self.OnSelectNavSleep, ctrl=spin_nav_sleep))
+
+        # Change sleep pause between coordinate update
+        coord_sleep = wx.StaticText(self, -1, _("Coordinate Sleep (s):"))
+        spin_coord_sleep = wx.SpinCtrlDouble(self, -1, "", size=wx.Size(50, 23), inc=0.01)
+        spin_coord_sleep.Enable(1)
+        spin_coord_sleep.SetRange(0.01, 10.0)
+        spin_coord_sleep.SetValue(self.sleep_coord)
+        spin_coord_sleep.Bind(wx.EVT_TEXT, partial(self.OnSelectCoordSleep, ctrl=spin_coord_sleep))
+        spin_coord_sleep.Bind(
+            wx.EVT_SPINCTRL, partial(self.OnSelectCoordSleep, ctrl=spin_coord_sleep)
+        )
+
+        line_nav_sleep = wx.BoxSizer(wx.HORIZONTAL)
+        line_nav_sleep.AddMany(
+            [
+                (nav_sleep, 1, wx.EXPAND | wx.GROW | wx.TOP | wx.RIGHT | wx.LEFT, 5),
+                (spin_nav_sleep, 0, wx.ALL | wx.EXPAND | wx.GROW, 5),
+            ]
+        )
+
+        line_coord_sleep = wx.BoxSizer(wx.HORIZONTAL)
+        line_coord_sleep.AddMany(
+            [
+                (coord_sleep, 1, wx.EXPAND | wx.GROW | wx.TOP | wx.RIGHT | wx.LEFT, 5),
+                (spin_coord_sleep, 0, wx.ALL | wx.EXPAND | wx.GROW, 5),
+            ]
+        )
+
+        # Add line sizers into main sizer
+        conf_sizer = wx.StaticBoxSizer(wx.VERTICAL, self, _("Sleep time configuration"))
+        conf_sizer.AddMany(
+            [
+                (text_note, 0, wx.ALL, 10),
+                (line_nav_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
+                (line_coord_sleep, 0, wx.GROW | wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 5),
+            ]
+        )
+
+        # Marker shape preferences
+        bsizer_markers = wx.StaticBoxSizer(wx.HORIZONTAL, self, _("Marker Shapes"))
+
+        lbl_landmark_shape = wx.StaticText(bsizer_markers.GetStaticBox(), -1, _("Landmarks: "))
+        rb_landmark_shape = self.rb_landmark_shape = wx.RadioBox(
+            bsizer_markers.GetStaticBox(),
+            -1,
+            choices=[_("Ball"), _("Cross")],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,
+        )
+        bsizer_markers.Add(lbl_landmark_shape, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 18)
+        bsizer_markers.Add(rb_landmark_shape, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 0)
+
+        lbl_fiducial_shape = wx.StaticText(bsizer_markers.GetStaticBox(), -1, _("Fiducials: "))
+        rb_fiducial_shape = self.rb_fiducial_shape = wx.RadioBox(
+            bsizer_markers.GetStaticBox(),
+            -1,
+            choices=[_("Ball"), _("Cross")],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS | wx.NO_BORDER,
+        )
+        bsizer_markers.Add(lbl_fiducial_shape, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 18)
+        bsizer_markers.Add(rb_fiducial_shape, 0, wx.TOP | wx.LEFT | wx.FIXED_MINSIZE, 0)
+
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer.Add(conf_sizer, 0, wx.ALL | wx.EXPAND, 10)
+        main_sizer.Add(bsizer_markers, 0, wx.ALL | wx.EXPAND, 10)
+        # Creating MEP Mapping BoxSizer
+        if self.mep_configuration.get("mep_enabled") is True:
+            self.bsizer_mep = self.InitMEPMapping(None)
+            main_sizer.Add(self.bsizer_mep, 0, wx.EXPAND | wx.ALL | wx.FIXED_MINSIZE, 10)
+
+        self.SetSizerAndFit(main_sizer)
+        self.Layout()
+
+    def OnSelectNavSleep(self, evt, ctrl):
+        self.sleep_nav = ctrl.GetValue()
+        self.navigation.UpdateNavSleep(self.sleep_nav)
+
+        self.session.SetConfig("sleep_nav", self.sleep_nav)
+
+    def OnSelectCoordSleep(self, evt, ctrl):
+        self.sleep_coord = ctrl.GetValue()
+        Publisher.sendMessage("Update coord sleep", data=self.sleep_coord)
+
+        self.session.SetConfig("sleep_coord", self.sleep_nav)
+
+    def LoadConfig(self):
+        sleep_nav = self.session.GetConfig("sleep_nav")
+        sleep_coord = self.session.GetConfig("sleep_coord")
+        mep_configuration = self.session.GetConfig("mep_configuration")
+
+        if sleep_nav is not None:
+            self.sleep_nav = sleep_nav
+
+        if sleep_coord is not None:
+            self.sleep_coord = sleep_coord
+
+        try:
+            self.mep_configuration = dict(mep_configuration)
+        except TypeError:
+            self.mep_configuration = {}
+        self.mep_configuration["mep_colormap"] = self.mep_configuration.get(
+            "mep_colormap", "Viridis"
+        )
+        self.colormaps = [str(cmap) for cmap in const.MEP_COLORMAP_DEFINITIONS.keys()]
+        self.number_colors = 4
+
+    def GetSelection(self):
+        options = {
+            const.LANDMARK_MARKER_SHAPE: self.rb_landmark_shape.GetSelection(),
+            const.FIDUCIAL_MARKER_SHAPE: self.rb_fiducial_shape.GetSelection(),
+        }
+        return options
+
+    def LoadSelection(self, values):
+        landmark_marker_shape = values.get(const.LANDMARK_MARKER_SHAPE, const.MARKER_SHAPE_BALL)
+        fiducial_marker_shape = values.get(const.FIDUCIAL_MARKER_SHAPE, const.MARKER_SHAPE_CROSS)
+        self.rb_landmark_shape.SetSelection(int(landmark_marker_shape))
+        self.rb_fiducial_shape.SetSelection(int(fiducial_marker_shape))
 
     def InitMEPMapping(self, event):
         # Adding a new sized for MEP Mapping options
@@ -303,7 +612,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_gaussian_radius.Enable(1)
         self.spin_gaussian_radius.SetRange(1, 99)
-        self.spin_gaussian_radius.SetValue(self.conf.get("gaussian_radius"))
+        self.spin_gaussian_radius.SetValue(self.mep_configuration.get("gaussian_radius"))
 
         self.spin_gaussian_radius.Bind(
             wx.EVT_TEXT, partial(self.OnSelectGaussianRadius, ctrl=self.spin_gaussian_radius)
@@ -329,7 +638,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_std_dev.Enable(1)
         self.spin_std_dev.SetRange(0.01, 5.0)
-        self.spin_std_dev.SetValue(self.conf.get("gaussian_sharpness"))
+        self.spin_std_dev.SetValue(self.mep_configuration.get("gaussian_sharpness"))
 
         self.spin_std_dev.Bind(wx.EVT_TEXT, partial(self.OnSelectStdDev, ctrl=self.spin_std_dev))
         self.spin_std_dev.Bind(
@@ -350,7 +659,7 @@ class VisualizationTab(wx.Panel):
         self.spin_dims_size.Enable(1)
         self.spin_dims_size.SetIncrement(5)
         self.spin_dims_size.SetRange(10, 100)
-        self.spin_dims_size.SetValue(self.conf.get("dimensions_size"))
+        self.spin_dims_size.SetValue(self.mep_configuration.get("dimensions_size"))
 
         self.spin_dims_size.Bind(
             wx.EVT_TEXT, partial(self.OnSelectDimsSize, ctrl=self.spin_dims_size)
@@ -380,11 +689,13 @@ class VisualizationTab(wx.Panel):
         )
         self.combo_thresh.Bind(wx.EVT_COMBOBOX, self.OnSelectColormap)
         # by default use the initial value set in the configuration
-        self.combo_thresh.SetSelection(self.colormaps.index(self.conf.get("mep_colormap")))
+        self.combo_thresh.SetSelection(
+            self.colormaps.index(self.mep_configuration.get("mep_colormap"))
+        )
         # self.combo_thresh.SetSelection(0)
 
         colors_gradient = self.GenerateColormapColors(
-            self.conf.get("mep_colormap"), self.number_colors
+            self.mep_configuration.get("mep_colormap"), self.number_colors
         )
 
         self.gradient = grad.GradientDisp(
@@ -422,7 +733,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_min.Enable(1)
         self.spin_min.SetRange(0, 10000)
-        self.spin_min.SetValue(self.conf.get("colormap_range_uv").get("min"))
+        self.spin_min.SetValue(self.mep_configuration.get("colormap_range_uv").get("min"))
 
         lbl_low = wx.StaticText(bsizer_mep.GetStaticBox(), -1, _("Low Value (uV):"))
         self.spin_low = wx.SpinCtrlDouble(
@@ -430,7 +741,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_low.Enable(1)
         self.spin_low.SetRange(0, 10000)
-        self.spin_low.SetValue(self.conf.get("colormap_range_uv").get("low"))
+        self.spin_low.SetValue(self.mep_configuration.get("colormap_range_uv").get("low"))
 
         lbl_mid = wx.StaticText(bsizer_mep.GetStaticBox(), -1, _("Mid Value (uV):"))
         self.spin_mid = wx.SpinCtrlDouble(
@@ -438,7 +749,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_mid.Enable(1)
         self.spin_mid.SetRange(0, 10000)
-        self.spin_mid.SetValue(self.conf.get("colormap_range_uv").get("mid"))
+        self.spin_mid.SetValue(self.mep_configuration.get("colormap_range_uv").get("mid"))
 
         lbl_max = wx.StaticText(bsizer_mep.GetStaticBox(), -1, _("Max Value (uV):"))
         self.spin_max = wx.SpinCtrlDouble(
@@ -446,7 +757,7 @@ class VisualizationTab(wx.Panel):
         )
         self.spin_max.Enable(1)
         self.spin_max.SetRange(0, 10000)
-        self.spin_max.SetValue(self.conf.get("colormap_range_uv").get("max"))
+        self.spin_max.SetValue(self.mep_configuration.get("colormap_range_uv").get("max"))
 
         line_cm_texts = wx.BoxSizer(wx.HORIZONTAL)
         line_cm_texts.AddMany(
@@ -511,20 +822,22 @@ class VisualizationTab(wx.Panel):
     def ResetMEPSettings(self, event):
         # fire an event that will reset the MEP settings to the default values in MEP Visualizer
         Publisher.sendMessage("Reset MEP Config")
-        # self.session.SetConfig('mep_configuration', self.conf)
+        # self.session.SetConfig('mep_configuration', self.mep_configuration)
         self.UpdateMEPFromSession()
 
     def UpdateMEPFromSession(self):
-        self.conf = dict(self.session.GetConfig("mep_configuration"))
-        self.spin_gaussian_radius.SetValue(self.conf.get("gaussian_radius"))
-        self.spin_std_dev.SetValue(self.conf.get("gaussian_sharpness"))
-        self.spin_dims_size.SetValue(self.conf.get("dimensions_size"))
+        self.mep_configuration = dict(self.session.GetConfig("mep_configuration"))
+        self.spin_gaussian_radius.SetValue(self.mep_configuration.get("gaussian_radius"))
+        self.spin_std_dev.SetValue(self.mep_configuration.get("gaussian_sharpness"))
+        self.spin_dims_size.SetValue(self.mep_configuration.get("dimensions_size"))
 
-        self.combo_thresh.SetSelection(self.colormaps.index(self.conf.get("mep_colormap")))
+        self.combo_thresh.SetSelection(
+            self.colormaps.index(self.mep_configuration.get("mep_colormap"))
+        )
         partial(self.OnSelectColormap, event=None, ctrl=self.combo_thresh)
         partial(self.OnSelectColormapRange, event=None, ctrl=self.spin_min, key="min")
 
-        ranges = self.conf.get("colormap_range_uv")
+        ranges = self.mep_configuration.get("colormap_range_uv")
         ranges = dict(ranges)
         self.spin_min.SetValue(ranges.get("min"))
         self.spin_low.SetValue(ranges.get("low"))
@@ -532,39 +845,32 @@ class VisualizationTab(wx.Panel):
         self.spin_max.SetValue(ranges.get("max"))
 
     def OnSelectStdDev(self, evt, ctrl):
-        self.conf["gaussian_sharpness"] = ctrl.GetValue()
+        self.mep_configuration["gaussian_sharpness"] = ctrl.GetValue()
         # Save the configuration
-        self.session.SetConfig("mep_configuration", self.conf)
+        self.session.SetConfig("mep_configuration", self.mep_configuration)
 
     def OnSelectGaussianRadius(self, evt, ctrl):
-        self.conf["gaussian_radius"] = ctrl.GetValue()
+        self.mep_configuration["gaussian_radius"] = ctrl.GetValue()
         # Save the configuration
-        self.session.SetConfig("mep_configuration", self.conf)
+        self.session.SetConfig("mep_configuration", self.mep_configuration)
 
     def OnSelectDimsSize(self, evt, ctrl):
-        self.conf["dimensions_size"] = ctrl.GetValue()
+        self.mep_configuration["dimensions_size"] = ctrl.GetValue()
         # Save the configuration
-        self.session.SetConfig("mep_configuration", self.conf)
+        self.session.SetConfig("mep_configuration", self.mep_configuration)
 
     def OnSelectColormapRange(self, evt, ctrl, key):
-        self.conf["colormap_range_uv"][key] = ctrl.GetValue()
-        self.session.SetConfig("mep_configuration", self.conf)
-
-    def LoadSelection(self, values):
-        rendering = values[const.RENDERING]
-        surface_interpolation = values[const.SURFACE_INTERPOLATION]
-        slice_interpolation = values[const.SLICE_INTERPOLATION]
-
-        self.rb_rendering.SetSelection(int(rendering))
-        self.rb_inter.SetSelection(int(surface_interpolation))
-        self.rb_inter_sl.SetSelection(int(slice_interpolation))
+        self.mep_configuration["colormap_range_uv"][key] = ctrl.GetValue()
+        self.session.SetConfig("mep_configuration", self.mep_configuration)
 
     def OnSelectColormap(self, event=None):
-        self.conf["mep_colormap"] = self.colormaps[self.combo_thresh.GetSelection()]
-        colors = self.GenerateColormapColors(self.conf.get("mep_colormap"), self.number_colors)
+        self.mep_configuration["mep_colormap"] = self.colormaps[self.combo_thresh.GetSelection()]
+        colors = self.GenerateColormapColors(
+            self.mep_configuration.get("mep_colormap"), self.number_colors
+        )
 
         # Save the configuration
-        self.session.SetConfig("mep_configuration", self.conf)
+        self.session.SetConfig("mep_configuration", self.mep_configuration)
         Publisher.sendMessage("Save Preferences")
         self.UpdateGradient(self.gradient, colors)
 
