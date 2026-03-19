@@ -498,12 +498,17 @@ class Robots(metaclass=Singleton):
 
                 # Extract the correct rotation matrix from the Tracker-to-Robot mapping
                 if robot.matrix_tracker_to_robot is not None:
-                    if len(robot.matrix_tracker_to_robot) == 12:
-                        # Third matrix in the (12, 4) stack is the affine matrix (tracker to robot coordinates)
-                        rotation_matrix = robot.matrix_tracker_to_robot[8:11, 0:3]
-                    else:
-                        # Standard 4x4 affine matrix
-                        rotation_matrix = robot.matrix_tracker_to_robot[:3, :3]
+                    try:
+                        # The matrix might be a flattened list or (48, 1) shape from JSON
+                        mat = np.array(robot.matrix_tracker_to_robot).reshape(-1, 4)
+                        if mat.shape[0] == 12:
+                            # Third matrix in the (12, 4) stack is the affine matrix (tracker to robot coordinates)
+                            rotation_matrix = mat[8:11, 0:3]
+                        else:
+                            # Standard 4x4 affine matrix
+                            rotation_matrix = mat[:3, :3]
+                    except ValueError:
+                        rotation_matrix = np.eye(3)
                 else:
                     rotation_matrix = np.eye(3)
                 
