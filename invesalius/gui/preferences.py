@@ -1824,8 +1824,6 @@ class TrackerTab(wx.Panel):
                 self.main_sizer.Add(self.setup_robot_2, 0, wx.ALL | wx.EXPAND, 0)
                 Publisher.sendMessage("Show second robot", state=True)
         else:
-            # if "robot_2" in self.robot.robots:
-            #    self.robot.robots.pop("robot_2")
             if hasattr(self, "setup_robot_2"):
                 self.setup_robot_2.Destroy()
                 del self.setup_robot_2

@@ -772,7 +772,6 @@ class ReceiveCoordinates(threading.Thread):
         self.tracker_id = tracker_id
         self.event = event
         self.TrackerCoordinates = TrackerCoordinates
-        self.RobotIDs = [None]
 
     def __bind_events(self) -> None:
         Publisher.subscribe(self.UpdateCoordSleep, "Update coord sleep")

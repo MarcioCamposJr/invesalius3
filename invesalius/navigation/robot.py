@@ -56,6 +56,7 @@ class Robot:
         self.icp = icp
         self.enabled_in_gui = False
         self.coil_name = None
+        self.obj_ID_Tracker = None
         self.obb_local = None  # OBB definition in marker-local frame: (center, axes_3x3)
         self.init_coil_angle = []
         self.init_center_coord = []
@@ -134,6 +135,8 @@ class Robot:
 
     def SetCoilRegistation(self, coil_registration):
         if coil_registration:
+            self.obj_ID_Tracker = coil_registration.get("obj_id", None)
+
             left_fiducial = coil_registration.get("fiducials")[0]
             right_fiducial = coil_registration.get("fiducials")[1]
             anterior_fiducial = coil_registration.get("fiducials")[2]
@@ -235,6 +238,12 @@ class Robot:
         self.coil_name = name
         self.SaveConfig("robot_coil", name)
         self.LoadConfig()
+
+        self.UpdateObjIDTracker()
+    
+    def UpdateObjIDTracker(self):
+        session = ses.Session()
+        self.obj_ID_Tracker = session.GetConfig("coil_registrations", {}).get(self.coil_name, {}).get("obj_id", None)
 
     def SetInitCoilCoords(
         self, left=None, right=None, anterior=None, init_coord_coil=None, init_coil_angle=None
@@ -400,7 +409,7 @@ class Robots(metaclass=Singleton):
         }
         self.active = "robot_1"  # Default active robot
         self.RobotCoilAssociation = {}
-        self.BallCreated = False
+        self.tracker_coils_id = {}
 
         self.distance_coils = None
         self.brake_vector = {}
@@ -468,11 +477,9 @@ class Robots(metaclass=Singleton):
                     break
 
                 # Get tracker coordinates
-                coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(robot_ID=robot.robot_name)
-                coords_all[robot.robot_name] = coords  # Save for each robot
+                coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates()
 
-                pose_idx = 2 if robot.robot_name == "robot_1" else 3
-                pose_coil_atual = coords[pose_idx]
+                pose_coil_atual = coords[robot.obj_ID_Tracker]
 
                 t_atual = pose_coil_atual[:3]
                 angles_atual = pose_coil_atual[3:]
@@ -497,15 +504,14 @@ class Robots(metaclass=Singleton):
             )
 
             # Head/subject coordinate (tracker index 1)
-            subject_pos_robot1 = coords_all["robot_1"][1][:3]
-            subject_pos_robot2 = coords_all["robot_2"][1][:3]
+            subject_pos = coords[1][:3]
 
             brake_vectors = {}
             brake_vectors["robot_1"] = self.CalculateBrakeVector(
-                closest_pt_1, closest_pt_2, subject_pos_robot1
+                closest_pt_1, closest_pt_2, subject_pos
             )
             brake_vectors["robot_2"] = self.CalculateBrakeVector(
-                closest_pt_2, closest_pt_1, subject_pos_robot2
+                closest_pt_2, closest_pt_1, subject_pos
             )
 
             min_distance = 0.5 if min_distance == 0.0 else min_distance
@@ -559,12 +565,16 @@ class Robots(metaclass=Singleton):
 
     def SendTrackerPoses(self, poses, visibilities):
         robots = self.GetAllRobots()
-        for robot_ID in robots.keys():
+        for robot_ID, robot in robots.items():
+            
+            corrected_poses = poses[0], poses[1], poses[robot.obj_ID_Tracker]
+            corrected_visibilities = visibilities[0], visibilities[1], visibilities[robot.obj_ID_Tracker]
+
             wx.CallAfter(
                 Publisher.sendMessage,
                 "From Neuronavigation to robot: Update tracker poses",
-                poses=poses,
-                visibilities=visibilities,
+                poses=corrected_poses,
+                visibilities=corrected_visibilities,
                 robot_ID=robot_ID,
             )
 
@@ -577,7 +587,6 @@ class Robots(metaclass=Singleton):
     def DeleteSecondRobot(self):
         if self._robots["robot_2"] is not None:
             del self._robots["robot_2"]
-            self._robots["robot_2"] = None
 
     def GetRobot(self, name: str):
         return self._robots.get(name) if self._robots.get(name) is not None else None
@@ -595,7 +604,6 @@ class Robots(metaclass=Singleton):
     def GetAllCoilsRobots(self):
         for robot_id in self.GetAllRobots().keys():
             robot_obj = self._robots[robot_id]
-            # if robot_obj is not None and robot_obj.IsConnected():
             self.RobotCoilAssociation[robot_obj.coil_name] = robot_obj.robot_name
 
         Publisher.sendMessage(
