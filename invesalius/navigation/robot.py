@@ -466,6 +466,7 @@ class Robots(metaclass=Singleton):
 
             obbs_world = {}  # OBB vertices in world frame for each robot
             coords_all = {}  # Store coords for each robot
+            matrix_tracker_to_robot = {}
             skip = False
 
             for coil_name in coils_name:
@@ -495,6 +496,19 @@ class Robots(metaclass=Singleton):
                 vertices = obb_vertices_from_center_axes(obb_center_world, obb_axes_world)
                 obbs_world[robot.robot_name] = vertices
 
+                # Extract the correct rotation matrix from the Tracker-to-Robot mapping
+                if robot.matrix_tracker_to_robot is not None:
+                    if len(robot.matrix_tracker_to_robot) == 12:
+                        # Third matrix in the (12, 4) stack is the affine matrix (tracker to robot coordinates)
+                        rotation_matrix = robot.matrix_tracker_to_robot[8:11, 0:3]
+                    else:
+                        # Standard 4x4 affine matrix
+                        rotation_matrix = robot.matrix_tracker_to_robot[:3, :3]
+                else:
+                    rotation_matrix = np.eye(3)
+                
+                matrix_tracker_to_robot[robot.robot_name] = rotation_matrix
+
             if skip or len(obbs_world) < 2:
                 return
 
@@ -506,13 +520,12 @@ class Robots(metaclass=Singleton):
             # Head/subject coordinate (tracker index 1)
             subject_pos = coords[1][:3]
 
+            v1_tracker = self.CalculateBrakeVector(closest_pt_1, closest_pt_2, subject_pos)
+            v2_tracker = self.CalculateBrakeVector(closest_pt_2, closest_pt_1, subject_pos)
+
             brake_vectors = {}
-            brake_vectors["robot_1"] = self.CalculateBrakeVector(
-                closest_pt_1, closest_pt_2, subject_pos
-            )
-            brake_vectors["robot_2"] = self.CalculateBrakeVector(
-                closest_pt_2, closest_pt_1, subject_pos
-            )
+            brake_vectors["robot_1"] = matrix_tracker_to_robot["robot_1"] @ v1_tracker if v1_tracker is not None else None
+            brake_vectors["robot_2"] = matrix_tracker_to_robot["robot_2"] @ v2_tracker if v2_tracker is not None else None
 
             min_distance = 0.5 if min_distance == 0.0 else min_distance
 
