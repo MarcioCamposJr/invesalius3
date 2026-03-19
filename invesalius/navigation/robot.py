@@ -579,9 +579,12 @@ class Robots(metaclass=Singleton):
     def SendTrackerPoses(self, poses, visibilities):
         robots = self.GetAllRobots()
         for robot_ID, robot in robots.items():
-            
-            corrected_poses = poses[0], poses[1], poses[robot.obj_ID_Tracker]
-            corrected_visibilities = visibilities[0], visibilities[1], visibilities[robot.obj_ID_Tracker]
+            if robot.obj_ID_Tracker is not None:
+                corrected_poses = poses[0], poses[1], poses[robot.obj_ID_Tracker]
+                corrected_visibilities = visibilities[0], visibilities[1], visibilities[robot.obj_ID_Tracker]
+            else:
+                corrected_poses = poses[0], poses[1], poses[2]
+                corrected_visibilities = visibilities[0], visibilities[1], visibilities[2]
 
             wx.CallAfter(
                 Publisher.sendMessage,
