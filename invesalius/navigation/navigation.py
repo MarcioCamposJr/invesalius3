@@ -482,7 +482,7 @@ class Navigation(metaclass=Singleton):
     def SetLockToTarget(self, value):
         self.lock_to_target = value
 
-    def SetNoOfCoils(self, n_coils):
+    def SetNoOfCoils(self, n_coils, clear_all=False, **kwargs):
         self.n_coils = n_coils
         self.SaveConfig("n_coils", n_coils)
 

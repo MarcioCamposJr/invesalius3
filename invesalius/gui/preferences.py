@@ -1244,17 +1244,27 @@ class ObjectTab(wx.Panel):
 
         self.Layout()
 
-    def OnSetCoilCount(self, n_coils):
+    def OnSetCoilCount(self, n_coils, clear_all=False, **kwargs):
         multicoil_mode = n_coils > 1
 
         if multicoil_mode:
             # Update multicoil GUI elements
             self.sel_sizer.GetStaticBox().SetLabel(f"TMS coil selection (0 out of {n_coils})")
 
-        # Reset (enable and unpress) all coil-buttons
-        for btn, *junk in self.coil_btns.values():
-            btn.Enable()
-            btn.SetValue(False)
+        if clear_all:
+            self.coil_registrations.clear()
+            self.session.SetConfig("coil_registrations", self.coil_registrations)
+
+            for btn, *junk in list(self.coil_btns.values()):
+                btn.Destroy()
+            self.coil_btns.clear()
+
+            self.config_txt.SetLabel(_("None"))
+        else:
+            # Reset (enable and unpress) all coil-buttons
+            for btn, *junk in self.coil_btns.values():
+                btn.Enable()
+                btn.SetValue(False)
 
         self.ShowMulticoilGUI(multicoil_mode)
 
@@ -1304,7 +1314,9 @@ class ObjectTab(wx.Panel):
     def OnSelectCoil(self, event=None, name=None, select=False):
         if name is None:
             if not select:  # Unselect all coils
-                Publisher.sendMessage("Reset coil selection", n_coils=self.navigation.n_coils)
+                Publisher.sendMessage(
+                    "Reset coil selection", n_coils=self.navigation.n_coils, clear_all=False
+                )
             return
 
         coil_registration = None
@@ -1973,13 +1985,15 @@ class TrackerTab(wx.Panel):
         else:
             self.n_coils = 1
 
+        clear_all = self.n_coils < old_n_coils
+
         if self.n_coils != old_n_coils:  # if n_coils was changed reset connection
             tracker_id = self.tracker.tracker_id
             self.tracker.DisconnectTracker()
             self.tracker.SetTracker(tracker_id, n_coils=self.n_coils)
 
         ctrl.SetSelection(self.n_coils - 1)
-        Publisher.sendMessage("Reset coil selection", n_coils=self.n_coils)
+        Publisher.sendMessage("Reset coil selection", n_coils=self.n_coils, clear_all=clear_all)
         Publisher.sendMessage("Coil selection done", done=False)
 
     def OnChooseTracker(self, evt, ctrl):
@@ -1999,7 +2013,7 @@ class TrackerTab(wx.Panel):
         self.tracker.SetTracker(choice, n_coils=self.n_coils)
         Publisher.sendMessage("Update status text in GUI", label=_("Ready"))
         Publisher.sendMessage("Tracker changed")
-        Publisher.sendMessage("Reset coil selection", n_coils=self.n_coils)
+        Publisher.sendMessage("Reset coil selection", n_coils=self.n_coils, clear_all=False)
         Publisher.sendMessage("Coil selection done", done=False)
         ctrl.SetSelection(self.tracker.tracker_id)
         Publisher.sendMessage("End busy cursor")
