@@ -948,23 +948,24 @@ class Viewer(wx.Panel):
         self.ren_obj.AddActor(dummy_obj_actor)
         self.ren_obj.InteractiveOff()
 
-        # Create spheres for coils
-        total_width = (num_coils - 1) * 15  # Total width the spheres will occupy
-        start_x = -total_width / 2.0
+        # Create spheres for coils only if there is more than 1 coil
+        if num_coils > 1:
+            total_width = (num_coils - 1) * 15  # Total width the spheres will occupy
+            start_x = -total_width / 2.0
 
-        for i in range(num_coils):
-            sphere_source = vtkSphereSource()
-            sphere_source.SetRadius(6)
-            sphere_source.SetCenter(start_x + i * 15, -40, 0)  # Positioned below the coil icon
-            self.coil_sensor_sources.append(sphere_source)
+            for i in range(num_coils):
+                sphere_source = vtkSphereSource()
+                sphere_source.SetRadius(6)
+                sphere_source.SetCenter(start_x + i * 15, -40, 0)  # Positioned below the coil icon
+                self.coil_sensor_sources.append(sphere_source)
 
-            mapper = vtkPolyDataMapper()
-            mapper.SetInputConnection(sphere_source.GetOutputPort())
+                mapper = vtkPolyDataMapper()
+                mapper.SetInputConnection(sphere_source.GetOutputPort())
 
-            actor = vtkActor()
-            actor.SetMapper(mapper)
-            self.ren_obj.AddActor(actor)
-            self.coil_sensor_spheres.append(actor)
+                actor = vtkActor()
+                actor.SetMapper(mapper)
+                self.ren_obj.AddActor(actor)
+                self.coil_sensor_spheres.append(actor)
 
     def OnRemoveSensorsID(self):
         if self.probe:
