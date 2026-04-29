@@ -2629,6 +2629,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
 
         self.navigation = nav_hub.navigation
         self.markers = nav_hub.markers
+        self.robot = nav_hub.robot
 
         if has_mTMS:
             self.mTMS = mTMS()
@@ -2713,12 +2714,18 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         sizer_delete.AddMany([(btn_delete_single, 1, wx.RIGHT), (btn_delete_all, 0, wx.LEFT)])
 
         # Combobox for choosing the main coil (ie. the coil which to track with pointer and to use for marker creation)
+        robot_coil = self.robot.GetCoilName()
+        init_choices = [
+            f"{coil} (robo)" if coil == robot_coil else coil
+            for coil in self.navigation.coil_registrations
+        ]
+
         self.select_main_coil = select_main_coil = wx.ComboBox(
             self,
             -1,
             "",
             size=(145, -1),
-            choices=list(self.navigation.coil_registrations),
+            choices=init_choices,
             style=wx.CB_DROPDOWN | wx.CB_READONLY,
         )
         maincoil_tooltip = "Select which coil to record markers with"
@@ -2730,8 +2737,11 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         # If main coil is defined, select this in the combobox
         nav_state = self.session.GetConfig("navigation", {})
         if (main_coil := nav_state.get("main_coil", None)) is not None:
-            main_coil_index = select_main_coil.FindString(main_coil)
-            select_main_coil.SetSelection(main_coil_index)
+            try:
+                main_coil_index = list(self.navigation.coil_registrations).index(main_coil)
+                select_main_coil.SetSelection(main_coil_index)
+            except ValueError:
+                pass
 
         # Hide main_coil combobox if single coil mode
         select_main_coil.Show(nav_state.get("n_coils", 1) != 1)
@@ -3521,9 +3531,19 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         select_main_coil = self.select_main_coil
         if done:
             select_main_coil.Clear()
-            select_main_coil.AppendItems(list(self.navigation.coil_registrations))
-            main_coil_index = select_main_coil.FindString(self.navigation.main_coil)
-            select_main_coil.SetSelection(main_coil_index)
+            robot_coil = self.robot.GetCoilName()
+            choices = [
+                f"{coil} (robo)" if coil == robot_coil else coil
+                for coil in self.navigation.coil_registrations
+            ]
+            select_main_coil.AppendItems(choices)
+            try:
+                main_coil_index = list(self.navigation.coil_registrations).index(
+                    self.navigation.main_coil
+                )
+                select_main_coil.SetSelection(main_coil_index)
+            except ValueError:
+                pass
         else:
             select_main_coil.Clear()
 
@@ -3536,6 +3556,8 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
     def OnChooseMainCoil(self, evt, ctrl):
         choice = evt.GetSelection()
         main_coil = ctrl.GetString(choice)
+        if main_coil.endswith(" (robot)"):
+            main_coil = main_coil[:-8]
         self.navigation.SetMainCoil(main_coil)
         ctrl.SetSelection(choice)
 
