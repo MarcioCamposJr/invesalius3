@@ -2247,7 +2247,8 @@ class ControlPanel(wx.Panel):
                 self.UpdateRobotButtons(robot_ID)
 
     def ShowSecondRobotButtons(self, state=True):
-        # self._create_toggle_robot_button()
+        if state:
+            self._create_toggle_robot_button()
         list_robot_id = list(self.robot_buttons_panel.keys())
         if len(list_robot_id) > 1:
             robot_panel = self.robot_buttons_panel[list_robot_id[1]]
@@ -2366,6 +2367,10 @@ class ControlPanel(wx.Panel):
             self.Layout()
 
     def UpdateRobotButtons(self, robot_ID):
+        # Skip if buttons for this robot haven't been created yet.
+        if "track_target_" + robot_ID not in self.robot_buttons:
+            return
+
         # Enable 'track target' robot button if:
         #
         #   - Navigation is on

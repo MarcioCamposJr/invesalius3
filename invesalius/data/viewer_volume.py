@@ -1321,6 +1321,10 @@ class Viewer(wx.Panel):
             self.DisableTargetMode()
 
     def OnUpdateCoilPose(self, m_img, coord, robot_ID, coil_name):
+        # Skip update if coordinates contain NaN or Inf values.
+        if not np.all(np.isfinite(coord)):
+            return
+
         # vtk_colors = vtkNamedColors()
 
         if self.target_coord and self.target_mode:
@@ -1650,11 +1654,11 @@ class Viewer(wx.Panel):
     def AddDynamicBalls(self, positions, m_change):
         # The incoming 'positions' are now correctly calculated in VTK space.
         # We just need to apply the Y-flip for final visualization and create the balls.
-        
-        if not positions or not (isinstance(positions, list) and isinstance(positions[0], list)):
-            return # Exit if the structure is not as expected
 
-        coil_colors = [[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]] # Yellow for coil 1, Cyan for coil 2
+        if not positions or not (isinstance(positions, list) and isinstance(positions[0], list)):
+            return  # Exit if the structure is not as expected
+
+        coil_colors = [[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]]  # Yellow for coil 1, Cyan for coil 2
 
         for i, point_list_for_coil in enumerate(positions):
             if not point_list_for_coil:
@@ -1665,7 +1669,7 @@ class Viewer(wx.Panel):
             for point_vtk in point_list_for_coil:
                 # Apply the Y-flip consistently used for visualization in the volume viewer.
                 display_point = [point_vtk[0], -point_vtk[1], point_vtk[2]]
-                
+
                 actor = self.actor_factory.CreateBall(display_point, colour=color, size=1.5)
                 self.ren.AddActor(actor)
                 self.balls.append(actor)

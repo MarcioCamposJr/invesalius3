@@ -153,12 +153,16 @@ class UpdateNavigationScene(threading.Thread):
                 track_this = self.navigation.main_coil if self.navigation.track_coil else "probe"
                 markers_target = self.markers.FindTarget(multiple=True)
 
-                if markers_target is None:
+                if not markers_target:
                     coils = [self.navigation.main_coil]
-                elif len(markers_target) > 1:
-                    coils = [marker.coil for marker in markers_target]
                 else:
-                    coils = [markers_target[0].coil]
+                    coils = [
+                        marker.coil if marker.coil else self.navigation.main_coil
+                        for marker in markers_target
+                    ]
+
+                # Ensure all assigned coils are actually being tracked. If not, fallback to main_coil.
+                coils = [c if c in m_imgs else self.navigation.main_coil for c in coils]
 
                 # choose which object to track in slices and viewer_volume pointer
                 coord = coords[track_this]
@@ -198,7 +202,9 @@ class UpdateNavigationScene(threading.Thread):
 
                 # Update the slice viewers to show the current position of the tracked object.
                 if not self.navigation.multitarget:
-                    wx.CallAfter(Publisher.sendMessage, "Update slices position", position=coord[:3])
+                    wx.CallAfter(
+                        Publisher.sendMessage, "Update slices position", position=coord[:3]
+                    )
 
                     # Update the cross position to the current position of the tracked object, so that, e.g., when a
                     # new marker is created, it is created in the current position of the object.
@@ -227,20 +233,19 @@ class UpdateNavigationScene(threading.Thread):
                             coil_name=coil,
                         )
                         wx.CallAfter(
-
-                        # Used to external tools to get coil pose
-                        Publisher.sendMessage,
-                        "From Neuronavigation: Send coil pose",
-                        coord=list(coords[coil]),
+                            # Used to external tools to get coil pose
+                            Publisher.sendMessage,
+                            "From Neuronavigation: Send coil pose",
+                            coord=list(coords[coil]),
                         )
                         wx.CallAfter(
-                                Publisher.sendMessage,
-                                "Update object arrow matrix",
-                                m_img=m_imgs[coil],
-                                coord=coords[coil],
-                                flag=self.peel_loaded,
-                                coil_name=coil,
-                            )
+                            Publisher.sendMessage,
+                            "Update object arrow matrix",
+                            m_img=m_imgs[coil],
+                            coord=coords[coil],
+                            flag=self.peel_loaded,
+                            coil_name=coil,
+                        )
 
                         if self.e_field_loaded:
                             wx.CallAfter(

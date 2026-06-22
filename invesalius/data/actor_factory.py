@@ -167,6 +167,9 @@ class ActorFactory:
         which the volume viewer uses). Note that it corresponds to the anterior of the coil, as the
         coil has a coordinate system where x-axis is the anterior-posterior axis.
         """
+        # Sanitize orientation: replace None values with 0.0 to prevent TypeError in VTK calls.
+        orientation = [float(v) if v is not None else 0.0 for v in orientation]
+
         arrow = vtk.vtkArrowSource()
         arrow.SetArrowOriginToDefault()
         arrow.SetTipResolution(40)
@@ -235,6 +238,9 @@ class ActorFactory:
         reader.Update()
 
         # Create the main transformation for the aim.
+        # Sanitize orientation: replace None values with 0.0 to prevent TypeError in VTK calls.
+        orientation = [float(v) if v is not None else 0.0 for v in orientation]
+
         transform = vtk.vtkTransform()
         transform.Identity()
 

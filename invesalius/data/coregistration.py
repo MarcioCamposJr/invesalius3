@@ -363,9 +363,9 @@ class CoordinateCorregistrate(threading.Thread):
         self.m_icp = icp.m_icp
         self.tracker_id = tracker_id
         self.targets = targets
-        self.last_coord = [[0]] * len(self.targets)
+        self.targets = targets
+        self.last_coord = [[0]] * max(1, len(self.targets))
         self.target_flag = False
-        self.has_target = True if len(self.targets) > 0 else False
 
     def run(self):
         m_change, r_stylus = self.coreg_data
@@ -398,7 +398,7 @@ class CoordinateCorregistrate(threading.Thread):
                     coords[coil_name] = coord_coil
                     m_imgs[coil_name] = m_img_coil
 
-                    if not self.has_target:
+                    if not self.targets:
                         prov_target = SimpleNamespace(
                             position=coords[coil_name][:3],
                             orientation=coords[coil_name][3:],
@@ -406,15 +406,18 @@ class CoordinateCorregistrate(threading.Thread):
                         )
                         prov_targets.append(prov_target)
 
-                        self.last_coord = [[0]] * len(prov_targets)
-                        self.targets = prov_targets
+                active_targets = self.targets if self.targets else prov_targets
 
-                for i, target in enumerate(self.targets):
-                    coord_target = target.position + target.orientation
+                if len(self.last_coord) < len(active_targets):
+                    self.last_coord = [[0]] * len(active_targets)
 
-                    main_coil = target.coil if target else next(iter(obj_datas))
+                for i, target in enumerate(active_targets):
+                    coord_target_pos = target.position
+                    coord_target_ori = [o if o is not None else 0.0 for o in target.orientation]
+                    coord_target = coord_target_pos + coord_target_ori
+
+                    main_coil = target.coil if target.coil else next(iter(obj_datas))
                     coord = coords[main_coil]
-                    m_img = m_imgs[main_coil]
 
                     # XXX: This is not the best place to do the logic related to approaching the target when the
                     #      debug tracker is in use. However, the trackers (including the debug trackers) operate in
@@ -426,7 +429,10 @@ class CoordinateCorregistrate(threading.Thread):
                         if len(self.last_coord[i]) == 1:
                             self.last_coord[i] = np.array(coord)
                         else:
-                            coord = self.last_coord[i] + (coord_target - self.last_coord[i]) * 0.05
+                            coord = (
+                                self.last_coord[i]
+                                + (np.array(coord_target) - self.last_coord[i]) * 0.05
+                            )
                             coords[main_coil] = coord
                             self.last_coord[i] = coord
 
@@ -434,16 +440,21 @@ class CoordinateCorregistrate(threading.Thread):
                         translate = coord[0:3]
                         m_imgs[main_coil] = tr.compose_matrix(angles=angles, translate=translate)
 
-                    self.coord_queue.put_nowait([coords, marker_visibilities, m_imgs])
+                self.coord_queue.put_nowait([coords, marker_visibilities, m_imgs])
 
-                    # Compute data for efield/tracts
-                    m_img_flip = m_img.copy()
-                    m_img_flip[1, -1] = -m_img_flip[1, -1]
+                # Compute data for efield/tracts (using the first active target's coil for backward compatibility)
+                main_coil_fallback = (
+                    active_targets[0].coil if active_targets[0].coil else next(iter(obj_datas))
+                )
+                m_img_flip = m_imgs[main_coil_fallback].copy()
+                m_img_flip[1, -1] = -m_img_flip[1, -1]
 
-                    if self.view_tracts:
-                        self.coord_tracts_queue.put_nowait(m_img_flip)
-                    if self.e_field_loaded:
-                        self.efield_queue.put_nowait([m_img, coord])
+                if self.view_tracts:
+                    self.coord_tracts_queue.put_nowait(m_img_flip)
+                if self.e_field_loaded:
+                    self.efield_queue.put_nowait(
+                        [m_imgs[main_coil_fallback], coords[main_coil_fallback]]
+                    )
             except queue.Full:
                 pass
 

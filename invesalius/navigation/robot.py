@@ -17,9 +17,9 @@
 #    detalhes.
 # --------------------------------------------------------------------------
 
-from enum import Enum
 import threading
 import time
+from enum import Enum
 
 import numpy as np
 import wx
@@ -43,9 +43,11 @@ class RobotObjective(Enum):
     TRACK_TARGET = 1
     MOVE_AWAY_FROM_HEAD = 2
 
+
 # Coil half-thickness in mm. The coil plane is expanded up and down by this
 # amount along the surface normal to form a 3D bounding box.
 COIL_HALF_THICKNESS = 7.0
+
 
 # Only one robot will be initialized per time. Therefore, we use
 # Singleton design pattern for implementing it
@@ -70,7 +72,6 @@ class Robot:
         self.robot_init_config = {}
 
         self.objective = RobotObjective.NONE
-
 
         # If tracker already has fiducials set, send them to the robot; this can happen, e.g.,
         # when a pre-existing state is loaded at start-up.
@@ -217,7 +218,9 @@ class Robot:
         )
         pressure_setpoint = ses.Session().GetConfig("pressure_setpoint", 10.0)
         Publisher.sendMessage(
-            "Neuronavigation to Robot: Pressure set point", pressure=pressure_setpoint, robot_ID=self.robot_name
+            "Neuronavigation to Robot: Pressure set point",
+            pressure=pressure_setpoint,
+            robot_ID=self.robot_name,
         )
         print("Connected to robot")
 
@@ -278,11 +281,13 @@ class Robot:
 
         # Transform to marker-local coordinate frame
         obb_center_local = R_world_to_marker @ (center_P_clean - init_coord_coil)
-        obb_axes_local = np.array([
-            R_world_to_marker @ half_u,
-            R_world_to_marker @ half_v,
-            R_world_to_marker @ half_n,
-        ])
+        obb_axes_local = np.array(
+            [
+                R_world_to_marker @ half_u,
+                R_world_to_marker @ half_v,
+                R_world_to_marker @ half_n,
+            ]
+        )
         self.obb_local = (obb_center_local, obb_axes_local)
 
     def SendTargetToRobot(self):
@@ -364,7 +369,7 @@ class Robot:
             Publisher.sendMessage("Press robot button", pressed=False, robot_ID=self.robot_name)
             Publisher.sendMessage("Press move away button", pressed=False, robot_ID=self.robot_name)
 
-    def OnRobotInitialConfig(self, config, robot_ID = None):
+    def OnRobotInitialConfig(self, config, robot_ID=None):
         if robot_ID != self.robot_name:
             return
         self.robot_init_config = config
@@ -389,7 +394,11 @@ class Robot:
         self.SendTargetToRobot()
 
     def SetPressureSetpoint(self, pressure):
-        Publisher.sendMessage("Neuronavigation to Robot: Pressure set point", pressure=pressure, robot_ID= self.robot_name)
+        Publisher.sendMessage(
+            "Neuronavigation to Robot: Pressure set point",
+            pressure=pressure,
+            robot_ID=self.robot_name,
+        )
 
 
 class Robots(metaclass=Singleton):
@@ -471,7 +480,9 @@ class Robots(metaclass=Singleton):
                     break
 
                 # Get tracker coordinates
-                coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(robot_ID=robot.robot_name)
+                coords, _ = robot.tracker.TrackerCoordinates.GetCoordinates(
+                    robot_ID=robot.robot_name
+                )
                 coords_all[robot.robot_name] = coords  # Save for each robot
 
                 pose_idx = 2 if robot.robot_name == "robot_1" else 3
@@ -572,15 +583,14 @@ class Robots(metaclass=Singleton):
             )
 
     def CreateSecondRobot(self):
-        if self._robots["robot_2"] is None:
+        if self._robots.get("robot_2") is None:
             self._robots["robot_2"] = Robot("robot_2", self.tracker, self.navigation, self.icp)
             print("Second robot created")
         return self._robots["robot_2"]
 
     def DeleteSecondRobot(self):
-        if self._robots["robot_2"] is not None:
+        if self._robots.get("robot_2") is not None:
             del self._robots["robot_2"]
-            self._robots["robot_2"] = None
 
     def GetRobot(self, name: str):
         return self._robots.get(name) if self._robots.get(name) is not None else None
@@ -661,7 +671,9 @@ class Robots(metaclass=Singleton):
         return all(allReady)
 
     def UpdateCoilsDistance(self):
-        if self.RobotCoilAssociation and len(self.RobotCoilAssociation) > 1: #TODO Improve this logic because we can use just one robot and two coils
+        if (
+            self.RobotCoilAssociation and len(self.RobotCoilAssociation) > 1
+        ):  # TODO Improve this logic because we can use just one robot and two coils
             with self._lock:
                 distance = self.distance_coils
                 brake = dict(self.brake_vector)
