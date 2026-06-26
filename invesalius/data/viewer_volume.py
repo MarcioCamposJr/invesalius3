@@ -257,7 +257,7 @@ class Viewer(wx.Panel):
         self.robot_warnings_text = None
 
         # self.obj_axes = None
-        self.mark_actor = None
+        self.mark_actor_dict = {}
         self.obj_projection_arrow_actor = None
         self.object_orientation_torus_actor = None
         self._to_show_ball = 0
@@ -288,7 +288,7 @@ class Viewer(wx.Panel):
 
         self.angle_arrow_projection_threshold = const.COIL_ANGLE_ARROW_PROJECTION_THRESHOLD
 
-        self.actor_tracts = None
+        self.actor_tracts_dict = {}
         self.actor_peel = None
 
         self.surface = None
@@ -2838,18 +2838,10 @@ class Viewer(wx.Panel):
         self.seed_offset = data
 
     def UpdateMarkerOffsetState(self, create=False):
-        if create:
-            if not self.mark_actor:
-                self.mark_actor = self.actor_factory.CreateBall(
-                    position=[0.0, 0.0, 0.0],
-                    colour=[0.0, 1.0, 1.0],
-                    size=1.5,
-                )
-                self.ren.AddActor(self.mark_actor)
-        else:
-            if self.mark_actor:
-                self.ren.RemoveActor(self.mark_actor)
-                self.mark_actor = None
+        if not create:
+            for actor in self.mark_actor_dict.values():
+                self.ren.RemoveActor(actor)
+            self.mark_actor_dict.clear()
         if not self.nav_status:
             self.UpdateRender()
 
@@ -2877,32 +2869,61 @@ class Viewer(wx.Panel):
                 colour=vtk_colors.GetColor3d("Red"),
             )
         else:
-            self.ren.RemoveActor(self.mark_actor)
+            for actor in self.mark_actor_dict.values():
+                self.ren.RemoveActor(actor)
+            self.mark_actor_dict.clear()
             self.ren.RemoveActor(self.obj_projection_arrow_actor)
             self.ren.RemoveActor(self.object_orientation_torus_actor)
 
-            self.mark_actor = None
             self.obj_projection_arrow_actor = None
             self.object_orientation_torus_actor = None
 
-    def OnUpdateTracts(self, root=None, affine_vtk=None, coord_offset=None, coord_offset_w=None):
-        mapper = vtkCompositePolyDataMapper()
-        mapper.SetInputDataObject(root)
+    def OnUpdateTracts(self, tracts_dict=None):
+        if tracts_dict is None:
+            return
 
-        self.actor_tracts = vtkActor()
-        self.actor_tracts.SetMapper(mapper)
-        self.actor_tracts.SetUserMatrix(affine_vtk)
+        # Remove actors for coils that are no longer in tracts_dict
+        coils_to_remove = [coil for coil in self.actor_tracts_dict if coil not in tracts_dict]
+        for coil in coils_to_remove:
+            self.ren.RemoveActor(self.actor_tracts_dict[coil])
+            del self.actor_tracts_dict[coil]
 
-        self.ren.AddActor(self.actor_tracts)
-        if self.mark_actor:
-            self.mark_actor.SetPosition(coord_offset)
+            if coil in self.mark_actor_dict:
+                self.ren.RemoveActor(self.mark_actor_dict[coil])
+                del self.mark_actor_dict[coil]
+
+        # Update or create actors for each coil
+        for coil_name, tract_data in tracts_dict.items():
+            root, affine_vtk, coord_offset, coord_offset_w = tract_data
+
+            # Update tract actor
+            if coil_name not in self.actor_tracts_dict:
+                self.actor_tracts_dict[coil_name] = vtkActor()
+                self.ren.AddActor(self.actor_tracts_dict[coil_name])
+
+            mapper = vtkCompositePolyDataMapper()
+            mapper.SetInputDataObject(root)
+            self.actor_tracts_dict[coil_name].SetMapper(mapper)
+            self.actor_tracts_dict[coil_name].SetUserMatrix(affine_vtk)
+
+            # Update mark actor
+            if coil_name not in self.mark_actor_dict:
+                self.mark_actor_dict[coil_name] = self.actor_factory.CreateBall(
+                    position=[0.0, 0.0, 0.0],
+                    colour=[0.0, 1.0, 1.0],
+                    size=1.5,
+                )
+                self.ren.AddActor(self.mark_actor_dict[coil_name])
+
+            self.mark_actor_dict[coil_name].SetPosition(coord_offset)
+
         self.Refresh()
 
     def OnRemoveTracts(self):
-        if self.actor_tracts:
-            self.ren.RemoveActor(self.actor_tracts)
-            self.actor_tracts = None
-            self.Refresh()
+        for actor in self.actor_tracts_dict.values():
+            self.ren.RemoveActor(actor)
+        self.actor_tracts_dict.clear()
+        self.Refresh()
 
     def __bind_events_wx(self):
         # self.Bind(wx.EVT_SIZE, self.OnSize)

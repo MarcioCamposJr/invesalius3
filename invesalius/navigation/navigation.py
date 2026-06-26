@@ -174,18 +174,13 @@ class UpdateNavigationScene(threading.Thread):
 
                 # use of CallAfter is mandatory otherwise crashes the wx interface
                 if self.view_tracts:
-                    bundle, affine_vtk, coord_offset, coord_offset_w = (
-                        self.tracts_queue.get_nowait()
-                    )
+                    tracts_dict = self.tracts_queue.get_nowait()
                     # TODO: Check if possible to combine the Remove tracts with Update tracts in a single command
                     wx.CallAfter(Publisher.sendMessage, "Remove tracts")
                     wx.CallAfter(
                         Publisher.sendMessage,
                         "Update tracts",
-                        root=bundle,
-                        affine_vtk=affine_vtk,
-                        coord_offset=coord_offset,
-                        coord_offset_w=coord_offset_w,
+                        tracts_dict=tracts_dict,
                     )
                     self.tracts_queue.task_done()
 

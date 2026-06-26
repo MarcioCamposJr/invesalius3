@@ -446,11 +446,15 @@ class CoordinateCorregistrate(threading.Thread):
                 main_coil_fallback = (
                     active_targets[0].coil if active_targets[0].coil else next(iter(obj_datas))
                 )
-                m_img_flip = m_imgs[main_coil_fallback].copy()
-                m_img_flip[1, -1] = -m_img_flip[1, -1]
+                m_img_flips = {}
+                for target in active_targets:
+                    coil_name = target.coil if target.coil else main_coil_fallback
+                    m_img_flip = m_imgs[coil_name].copy()
+                    m_img_flip[1, -1] = -m_img_flip[1, -1]
+                    m_img_flips[coil_name] = m_img_flip
 
                 if self.view_tracts:
-                    self.coord_tracts_queue.put_nowait(m_img_flip)
+                    self.coord_tracts_queue.put_nowait(m_img_flips)
                 if self.e_field_loaded:
                     self.efield_queue.put_nowait(
                         [m_imgs[main_coil_fallback], coords[main_coil_fallback]]

@@ -3243,10 +3243,11 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         else:
             self.nav_status = True
 
-    def UpdateSeedCoordinates(
-        self, root=None, affine_vtk=None, coord_offset=(0, 0, 0), coord_offset_w=(0, 0, 0)
-    ):
-        self.current_seed = coord_offset_w
+    def UpdateSeedCoordinates(self, tracts_dict=None):
+        if tracts_dict:
+            # Use the seed coordinates of the first coil in the dict for display purposes
+            first_tract = next(iter(tracts_dict.values()))
+            self.current_seed = first_tract[3]
 
     def UpdateCortexMarker(self, CoGposition, CoGorientation):
         self.cortex_position_orientation = CoGposition + CoGorientation
