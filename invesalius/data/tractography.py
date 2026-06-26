@@ -400,6 +400,17 @@ class ComputeTractsACTThread(threading.Thread):
         n_tracts_dict = {}
         count_loop_dict = {}
         bundle_dict = {}
+        dist_radius = 1.5
+
+        # create the rectangular grid to find the gray-white matter boundary
+        coord_list_w = img_utils.create_grid((-2, 2), (0, 20), offset - 5, 1)
+
+        # create the spherical grid to sample around the seed location
+        samples_in_sphere = img_utils.random_sample_sphere(radius=seed_radius, size=100)
+        coord_list_sphere = np.hstack(
+            [samples_in_sphere, np.ones([samples_in_sphere.shape[0], 1])]
+        ).T
+        m_seed = np.identity(4)
 
         # Compute the tracts
         while not self.event.is_set():
