@@ -1884,6 +1884,7 @@ class ControlPanel(wx.Panel):
         self.icp = nav_hub.icp
         self.image = nav_hub.image
         self.mep_visualizer = nav_hub.mep_visualizer
+        self.nav_hub = nav_hub
 
         self.nav_status = False
         self.target_mode = False

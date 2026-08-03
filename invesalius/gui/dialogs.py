@@ -8503,9 +8503,27 @@ class EEGDigitizationDialog(wx.Dialog):
         self.nav_hub = nav_hub
         self.eeg_montage = nav_hub.eeg_montage  # We'll need to instantiate this in NavigationHub
 
+        self.current_coord = None
+        Publisher.subscribe(self.OnUpdateCoord, "Set cross focal point")
+
         self.current_step = 1
         self._init_ui()
         self.CenterOnScreen()
+
+        self.Bind(wx.EVT_CLOSE, self.OnCloseEvent)
+
+    def OnUpdateCoord(self, position):
+        self.current_coord = list(position[:3])
+
+    def CloseDialog(self):
+        try:
+            Publisher.unsubscribe(self.OnUpdateCoord, "Set cross focal point")
+        except Exception:
+            pass
+
+    def OnCloseEvent(self, evt):
+        self.CloseDialog()
+        evt.Skip()
 
     def _init_ui(self):
         self.main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -8534,6 +8552,7 @@ class EEGDigitizationDialog(wx.Dialog):
         self.btn_prev.Bind(wx.EVT_BUTTON, self.OnPrev)
         self.btn_next.Bind(wx.EVT_BUTTON, self.OnNext)
         self.btn_finish.Bind(wx.EVT_BUTTON, self.OnFinish)
+        self.btn_cancel.Bind(wx.EVT_BUTTON, self.OnCancel)
 
         self.btn_sizer.AddStretchSpacer(1)
         self.btn_sizer.Add(self.btn_prev, 0, wx.ALL, 5)
@@ -8590,17 +8609,122 @@ class EEGDigitizationDialog(wx.Dialog):
             self.content_panel, -1, _("Register the following fiducials using the spatial tracker:")
         )
         self.content_sizer.Add(lbl, 0, wx.ALL, 5)
-        # TODO: Add fiducial capture buttons
+
+        self.fiducials_captured = {"nasion": False, "lpa": False, "rpa": False}
+
+        self.btn_nasion = wx.Button(self.content_panel, -1, _("Capture Nasion"))
+        self.btn_lpa = wx.Button(self.content_panel, -1, _("Capture LPA"))
+        self.btn_rpa = wx.Button(self.content_panel, -1, _("Capture RPA"))
+
+        self.btn_nasion.Bind(
+            wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("nasion", self.btn_nasion)
+        )
+        self.btn_lpa.Bind(wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("lpa", self.btn_lpa))
+        self.btn_rpa.Bind(wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("rpa", self.btn_rpa))
+
+        self.content_sizer.Add(self.btn_nasion, 0, wx.ALL, 5)
+        self.content_sizer.Add(self.btn_lpa, 0, wx.ALL, 5)
+        self.content_sizer.Add(self.btn_rpa, 0, wx.ALL, 5)
+
+    def OnCaptureFiducial(self, name, btn):
+        if self.current_coord is not None:
+            self.eeg_montage.add_fiducial_target(name, self.current_coord)
+            self.fiducials_captured[name] = True
+            btn.SetBackgroundColour(wx.Colour(144, 238, 144))  # Light green
+            btn.SetLabel(btn.GetLabel() + " (Captured)")
+            btn.Disable()
+
+            # Check if all fiducials are captured to perform alignment
+            if all(self.fiducials_captured.values()):
+                self.eeg_montage.align_fiducials()
+                wx.MessageBox(
+                    _("Fiducials aligned successfully!"), _("Success"), wx.ICON_INFORMATION
+                )
+        else:
+            wx.MessageBox(
+                _("No spatial tracker coordinate received yet."), _("Error"), wx.ICON_ERROR
+            )
 
     def _build_step_3(self):
         lbl = wx.StaticText(self.content_panel, -1, _("Capture electrode points on the head."))
         self.content_sizer.Add(lbl, 0, wx.ALL, 5)
-        # TODO: Add VTK preview and capture logic
+
+        self.btn_capture_elec = wx.Button(
+            self.content_panel, -1, _("Capture Electrode (or use pedal)")
+        )
+        self.btn_capture_elec.Bind(wx.EVT_BUTTON, self.OnCaptureElectrode)
+        self.content_sizer.Add(self.btn_capture_elec, 0, wx.ALL, 5)
+
+        self.lbl_elec_count = wx.StaticText(self.content_panel, -1, _("Electrodes captured: 0"))
+        self.content_sizer.Add(self.lbl_elec_count, 0, wx.ALL, 5)
+
+    def OnCaptureElectrode(self, evt=None):
+        if self.current_coord is not None:
+            count = len(self.eeg_montage.electrodes_target)
+            name = f"E{count + 1}"
+            self.eeg_montage.add_electrode_target(name, self.current_coord)
+            self.lbl_elec_count.SetLabel(_(f"Electrodes captured: {count + 1}"))
+        else:
+            wx.MessageBox(
+                _("No spatial tracker coordinate received yet."), _("Error"), wx.ICON_ERROR
+            )
 
     def _build_step_4(self):
         lbl = wx.StaticText(self.content_panel, -1, _("Review mapping results and export."))
         self.content_sizer.Add(lbl, 0, wx.ALL, 5)
-        # TODO: Add results table and export
+
+        self.btn_process = wx.Button(self.content_panel, -1, _("Process and Match Electrodes"))
+        self.btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
+        self.content_sizer.Add(self.btn_process, 0, wx.ALL, 5)
+
+        self.results_list = wx.ListCtrl(
+            self.content_panel, -1, style=wx.LC_REPORT | wx.BORDER_SUNKEN
+        )
+        self.results_list.InsertColumn(0, _("Matched Name"), width=100)
+        self.results_list.InsertColumn(1, _("Distance (mm)"), width=100)
+        self.results_list.InsertColumn(2, _("Confidence"), width=100)
+        self.content_sizer.Add(self.results_list, 1, wx.ALL | wx.EXPAND, 5)
+
+        self.btn_export = wx.Button(self.content_panel, -1, _("Export BIDS"))
+        self.btn_export.Bind(wx.EVT_BUTTON, self.OnExportBIDS)
+        self.content_sizer.Add(self.btn_export, 0, wx.ALL, 5)
+
+    def OnProcessElectrodes(self, evt):
+        try:
+            self.eeg_montage.filter_outliers_and_duplicates()
+            self.eeg_montage.perform_icp()
+            results = self.eeg_montage.label_electrodes()
+
+            self.results_list.DeleteAllItems()
+            for res in results:
+                idx = self.results_list.InsertItem(self.results_list.GetItemCount(), res["name"])
+                dist_str = f"{res['distance']:.2f}" if res["distance"] is not None else "N/A"
+                self.results_list.SetItem(idx, 1, dist_str)
+                self.results_list.SetItem(idx, 2, res["confidence"])
+
+                if res["confidence"] == "High":
+                    self.results_list.SetItemTextColour(idx, wx.Colour(0, 150, 0))
+                elif res["confidence"] == "Medium":
+                    self.results_list.SetItemTextColour(idx, wx.Colour(204, 204, 0))
+                else:
+                    self.results_list.SetItemTextColour(idx, wx.Colour(200, 0, 0))
+
+            wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
+        except Exception as e:
+            wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
+
+    def OnExportBIDS(self, evt):
+        dlg = wx.FileDialog(
+            self,
+            _("Save BIDS TSV"),
+            wildcard="TSV files (*.tsv)|*.tsv",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self.eeg_montage.export_to_bids(path)
+            wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
+        dlg.Destroy()
 
     def OnPrev(self, evt):
         self.current_step -= 1
@@ -8619,4 +8743,9 @@ class EEGDigitizationDialog(wx.Dialog):
         self.UpdateStep()
 
     def OnFinish(self, evt):
+        self.CloseDialog()
         self.EndModal(wx.ID_OK)
+
+    def OnCancel(self, evt):
+        self.CloseDialog()
+        self.EndModal(wx.ID_CANCEL)

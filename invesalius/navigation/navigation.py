@@ -40,6 +40,7 @@ import invesalius.session as ses
 from invesalius.data.markers.marker import MarkerType
 from invesalius.data.visualization.mep_visualizer import MEPVisualizer
 from invesalius.i18n import tr as _
+from invesalius.navigation.eeg_montage import EEGMontage
 from invesalius.navigation.image import Image
 from invesalius.navigation.iterativeclosestpoint import IterativeClosestPoint
 from invesalius.navigation.markers import MarkersControl
@@ -72,6 +73,7 @@ class NavigationHub(metaclass=Singleton):
         )
         self.markers = MarkersControl(robot=self.robot)
         self.mep_visualizer = MEPVisualizer()
+        self.eeg_montage = EEGMontage()
         Publisher.sendMessage("Add navigation context to interactive shell")
 
 
