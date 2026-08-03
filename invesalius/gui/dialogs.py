@@ -8480,3 +8480,143 @@ class GridConfigDialog(wx.Dialog):
             "points_per_ring": self.spin_points_per_ring.GetValue(),
             "spacing": self.spin_spacing.GetValue(),
         }
+
+
+class EEGDigitizationDialog(wx.Dialog):
+    """
+    Wizard dialog for EEG Electrode Digitization.
+    Guides the user through:
+    Step 1: Select Template
+    Step 2: Register Fiducials
+    Step 3: Point Cloud Capture
+    Step 4: Results and Manual Overrides
+    """
+
+    def __init__(self, nav_hub):
+        super().__init__(
+            nav_hub.window,
+            -1,
+            _("EEG Electrode Digitization Wizard"),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+            size=(800, 600),
+        )
+        self.nav_hub = nav_hub
+        self.eeg_montage = nav_hub.eeg_montage  # We'll need to instantiate this in NavigationHub
+
+        self.current_step = 1
+        self._init_ui()
+        self.CenterOnScreen()
+
+    def _init_ui(self):
+        self.main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Step titles
+        self.title_text = wx.StaticText(self, -1, _("Step 1: Select Template"))
+        font = self.title_text.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        font.SetPointSize(12)
+        self.title_text.SetFont(font)
+        self.main_sizer.Add(self.title_text, 0, wx.ALL | wx.EXPAND, 10)
+
+        # Content panel
+        self.content_panel = wx.Panel(self)
+        self.content_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.content_panel.SetSizer(self.content_sizer)
+        self.main_sizer.Add(self.content_panel, 1, wx.ALL | wx.EXPAND, 10)
+
+        # Navigation buttons
+        self.btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_prev = wx.Button(self, -1, _("< Previous"))
+        self.btn_next = wx.Button(self, -1, _("Next >"))
+        self.btn_finish = wx.Button(self, -1, _("Finish"))
+        self.btn_cancel = wx.Button(self, wx.ID_CANCEL, _("Cancel"))
+
+        self.btn_prev.Bind(wx.EVT_BUTTON, self.OnPrev)
+        self.btn_next.Bind(wx.EVT_BUTTON, self.OnNext)
+        self.btn_finish.Bind(wx.EVT_BUTTON, self.OnFinish)
+
+        self.btn_sizer.AddStretchSpacer(1)
+        self.btn_sizer.Add(self.btn_prev, 0, wx.ALL, 5)
+        self.btn_sizer.Add(self.btn_next, 0, wx.ALL, 5)
+        self.btn_sizer.Add(self.btn_finish, 0, wx.ALL, 5)
+        self.btn_sizer.Add(self.btn_cancel, 0, wx.ALL, 5)
+
+        self.main_sizer.Add(self.btn_sizer, 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizer(self.main_sizer)
+
+        self.UpdateStep()
+
+    def UpdateStep(self):
+        # Clear current content
+        self.content_sizer.Clear(True)
+
+        self.btn_prev.Enable(self.current_step > 1)
+        self.btn_next.Show(self.current_step < 4)
+        self.btn_finish.Show(self.current_step == 4)
+
+        if self.current_step == 1:
+            self.title_text.SetLabel(_("Step 1: Select Template"))
+            self._build_step_1()
+        elif self.current_step == 2:
+            self.title_text.SetLabel(_("Step 2: Register Fiducials"))
+            self._build_step_2()
+        elif self.current_step == 3:
+            self.title_text.SetLabel(_("Step 3: Point Cloud Capture"))
+            self._build_step_3()
+        elif self.current_step == 4:
+            self.title_text.SetLabel(_("Step 4: Results and Overrides"))
+            self._build_step_4()
+
+        self.content_panel.Layout()
+        self.btn_sizer.Layout()
+        self.main_sizer.Layout()
+
+    def _build_step_1(self):
+        lbl = wx.StaticText(self.content_panel, -1, _("Choose an EEG template:"))
+        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+
+        self.template_choice = wx.Choice(
+            self.content_panel, -1, choices=self.eeg_montage.get_available_templates()
+        )
+        if self.eeg_montage.template_name:
+            self.template_choice.SetStringSelection(self.eeg_montage.template_name)
+        elif self.template_choice.GetCount() > 0:
+            self.template_choice.SetSelection(0)
+
+        self.content_sizer.Add(self.template_choice, 0, wx.ALL | wx.EXPAND, 5)
+
+    def _build_step_2(self):
+        lbl = wx.StaticText(
+            self.content_panel, -1, _("Register the following fiducials using the spatial tracker:")
+        )
+        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        # TODO: Add fiducial capture buttons
+
+    def _build_step_3(self):
+        lbl = wx.StaticText(self.content_panel, -1, _("Capture electrode points on the head."))
+        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        # TODO: Add VTK preview and capture logic
+
+    def _build_step_4(self):
+        lbl = wx.StaticText(self.content_panel, -1, _("Review mapping results and export."))
+        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        # TODO: Add results table and export
+
+    def OnPrev(self, evt):
+        self.current_step -= 1
+        self.UpdateStep()
+
+    def OnNext(self, evt):
+        if self.current_step == 1:
+            template = self.template_choice.GetStringSelection()
+            if template:
+                self.eeg_montage.load_template(template)
+            else:
+                wx.MessageBox(_("Please select a template first."), _("Error"), wx.ICON_ERROR)
+                return
+
+        self.current_step += 1
+        self.UpdateStep()
+
+    def OnFinish(self, evt):
+        self.EndModal(wx.ID_OK)
