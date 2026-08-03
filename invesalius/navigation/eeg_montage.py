@@ -461,3 +461,75 @@ class EEGMontage(metaclass=Singleton):
             marker_ids.append(marker_id)
 
         return marker_ids
+
+    # --- BIDS Export ---
+
+    def export_bids(self, output_dir: str, subject_id: str = "01") -> Tuple[str, str]:
+        """
+        Export in EEG-BIDS format:
+        - electrodes.tsv: name, x, y, z (Scanner RAS in mm)
+        - coordsystem.json: coordinate system metadata
+
+        Returns: tuple (path_electrodes, path_coordsystem)
+        """
+        import json
+        import os
+
+        import pandas as pd
+
+        from invesalius.data import imagedata_utils
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # electrodes.tsv
+        rows = []
+        for elec in sorted(self.labeled_electrodes, key=lambda e: e.label):
+            rows.append(
+                {
+                    "name": elec.label,
+                    "x": round(float(elec.position_world[0]), 2),
+                    "y": round(float(elec.position_world[1]), 2),
+                    "z": round(float(elec.position_world[2]), 2),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        electrodes_path = os.path.join(output_dir, f"sub-{subject_id}_electrodes.tsv")
+        df.to_csv(electrodes_path, sep="\t", index=False)
+
+        # coordsystem.json
+        coordsystem = {
+            "EEGCoordinateSystem": "Other",
+            "EEGCoordinateUnits": "mm",
+            "EEGCoordinateSystemDescription": (
+                "Scanner RAS coordinate system derived from the subject MRI affine transformation."
+            ),
+            "IntendedFor": "",
+            "AnatomicalLandmarkCoordinateSystem": "Other",
+            "AnatomicalLandmarkCoordinateUnits": "mm",
+            "AnatomicalLandmarkCoordinates": {},
+            "DigitizationMethod": "InVesalius Navigator - Point Cloud ICP Matching",
+            "DigitizationTemplate": self.template_name or "unknown",
+            "ICPMeanErrorMM": self.mean_error_mm,
+        }
+
+        # Add fiducials to coordsystem
+        for fid_name, fid_pos in self.fiducials_inv.items():
+            if fid_pos is not None:
+                pos_world, _ = imagedata_utils.convert_invesalius_to_world(
+                    position=list(fid_pos), orientation=[0, 0, 0]
+                )
+                if pos_world[0] is not None:
+                    key = fid_name.upper()
+                    coordsystem["AnatomicalLandmarkCoordinates"][key] = {
+                        "x": round(float(pos_world[0]), 2),
+                        "y": round(float(pos_world[1]), 2),
+                        "z": round(float(pos_world[2]), 2),
+                    }
+
+        coordsystem_path = os.path.join(output_dir, f"sub-{subject_id}_coordsystem.json")
+        with open(coordsystem_path, "w") as f:
+            json.dump(coordsystem, f, indent=2)
+
+        self.state = DigitizationState.EXPORTED
+        return electrodes_path, coordsystem_path
