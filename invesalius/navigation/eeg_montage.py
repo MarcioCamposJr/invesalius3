@@ -140,3 +140,88 @@ class EEGMontage(metaclass=Singleton):
                 self._template_fiducials[key] = self._template_fiducials[key] * 1000
 
         self.state = DigitizationState.TEMPLATE_SELECTED
+
+    # --- Point Cloud Capture ---
+
+    def add_point(self, position: np.ndarray) -> int:
+        """Add a point to the point cloud. Returns the index of the point."""
+        self.point_cloud.append(np.array(position[:3]))
+        if self.state == DigitizationState.FIDUCIALS_REGISTERED:
+            self.state = DigitizationState.CAPTURING_POINTS
+        return len(self.point_cloud) - 1
+
+    def remove_last_point(self) -> bool:
+        """Remove the last captured point."""
+        if self.point_cloud:
+            self.point_cloud.pop()
+            return True
+        return False
+
+    def remove_point(self, index: int) -> bool:
+        """Remove a point at a specific index."""
+        if 0 <= index < len(self.point_cloud):
+            self.point_cloud.pop(index)
+            return True
+        return False
+
+    def get_point_cloud_array(self) -> np.ndarray:
+        """Return the point cloud as an (M, 3) numpy array."""
+        if not self.point_cloud:
+            return np.empty((0, 3))
+        return np.vstack(self.point_cloud)
+
+    # --- Outlier and Duplicate Filtering ---
+
+    def filter_outliers(self, std_factor: float = 2.5) -> List[int]:
+        """
+        Remove outlier points (accidental clicks outside the head).
+        Uses distance to centroid with a threshold based on standard deviation.
+        Returns the indices of the removed points.
+        """
+        if len(self.point_cloud) < 4:
+            return []
+
+        points = self.get_point_cloud_array()
+        centroid = points.mean(axis=0)
+        distances = np.linalg.norm(points - centroid, axis=1)
+
+        mean_dist = distances.mean()
+        std_dist = distances.std()
+        threshold = mean_dist + std_factor * std_dist
+
+        outlier_mask = distances > threshold
+        outlier_indices = list(np.where(outlier_mask)[0])
+
+        # Remove in reverse order to preserve indices
+        for idx in sorted(outlier_indices, reverse=True):
+            self.point_cloud.pop(idx)
+
+        return outlier_indices
+
+    def filter_duplicates(self, min_distance_mm: float = 3.0) -> int:
+        """
+        Remove duplicate points (points that are too close to each other).
+        Returns the number of removed points.
+        """
+        if len(self.point_cloud) < 2:
+            return 0
+
+        from scipy.spatial.distance import pdist, squareform
+
+        points = self.get_point_cloud_array()
+        dist_matrix = squareform(pdist(points))
+
+        to_remove = set()
+        for i in range(len(points)):
+            if i in to_remove:
+                continue
+            for j in range(i + 1, len(points)):
+                if j in to_remove:
+                    continue
+                if dist_matrix[i, j] < min_distance_mm:
+                    to_remove.add(j)
+
+        for idx in sorted(to_remove, reverse=True):
+            self.point_cloud.pop(idx)
+
+        return len(to_remove)
