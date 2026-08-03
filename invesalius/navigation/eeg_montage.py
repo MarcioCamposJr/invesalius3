@@ -317,3 +317,111 @@ class EEGMontage(metaclass=Singleton):
                 m[i, j] = vtk_matrix.GetElement(i, j)
 
         return m
+
+    # --- Matching Pipeline and Labeling ---
+
+    def run_icp_matching(self) -> Tuple[float, List[LabeledElectrode]]:
+        """
+        Complete Point Cloud Matching pipeline:
+        1. Filter duplicates and outliers
+        2. Initial alignment via fiducials (Nasion/LPA/RPA)
+        3. ICP refinement (template -> point cloud)
+        4. Labeling via minimum Euclidean distance (Hungarian algorithm)
+
+        Returns: (mean_error_mm, list of LabeledElectrode)
+        """
+        from scipy.optimize import linear_sum_assignment
+        from scipy.spatial.distance import cdist
+
+        from invesalius.data import imagedata_utils
+
+        if not self.are_fiducials_set():
+            raise ValueError("Fiducials are not registered")
+
+        if len(self.point_cloud) < 3:
+            raise ValueError("Insufficient point cloud (minimum 3 points)")
+
+        # Step 1: Filter
+        self.filter_duplicates()
+        self.filter_outliers()
+
+        # Step 2: Fiducial alignment
+        m_fiducial = self.compute_fiducial_alignment()
+        template_aligned = self.apply_transform_to_template(m_fiducial)
+
+        # Step 3: ICP refinement
+        m_icp = self._run_vtk_icp(
+            source_points=template_aligned,
+            target_points=self.get_point_cloud_array(),
+        )
+
+        # Total transform
+        self.icp_transform = m_icp @ m_fiducial
+        template_final = self.apply_transform_to_template(self.icp_transform)
+
+        # Step 4: Labeling (Hungarian assignment)
+        point_cloud = self.get_point_cloud_array()
+        cost_matrix = cdist(point_cloud, template_final)  # (M, N)
+
+        if len(point_cloud) <= len(template_final):
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+        else:
+            # More points than channels, transpose
+            row_ind_t, col_ind_t = linear_sum_assignment(cost_matrix.T)
+            row_ind, col_ind = col_ind_t, row_ind_t
+
+        self.labeled_electrodes = []
+        for pt_idx, tmpl_idx in zip(row_ind, col_ind):
+            dist = cost_matrix[pt_idx, tmpl_idx]
+
+            # Confidence thresholds
+            if dist < 5.0:
+                confidence = ConfidenceLevel.HIGH
+            elif dist < 10.0:
+                confidence = ConfidenceLevel.MEDIUM
+            else:
+                confidence = ConfidenceLevel.LOW
+
+            pos_inv = point_cloud[pt_idx]
+            # Convert to world (Scanner RAS)
+            pos_world, _ = imagedata_utils.convert_invesalius_to_world(
+                position=list(pos_inv), orientation=[0, 0, 0]
+            )
+            pos_world = np.array(pos_world) if pos_world[0] is not None else pos_inv
+
+            electrode = LabeledElectrode(
+                label=self.template_labels[tmpl_idx],
+                position_inv=pos_inv,
+                position_world=pos_world,
+                template_position=template_final[tmpl_idx],
+                distance_mm=float(dist),
+                confidence=confidence,
+            )
+            self.labeled_electrodes.append(electrode)
+
+        self.mean_error_mm = float(np.mean([e.distance_mm for e in self.labeled_electrodes]))
+        self.state = DigitizationState.MATCHING_DONE
+
+        return self.mean_error_mm, self.labeled_electrodes
+
+    # --- Manual Correction ---
+
+    def swap_labels(self, label_a: str, label_b: str) -> bool:
+        """Swap the labels between two electrodes."""
+        elec_a = next((e for e in self.labeled_electrodes if e.label == label_a), None)
+        elec_b = next((e for e in self.labeled_electrodes if e.label == label_b), None)
+        if elec_a is None or elec_b is None:
+            return False
+        elec_a.label, elec_b.label = elec_b.label, elec_a.label
+        elec_a.manually_corrected = True
+        elec_b.manually_corrected = True
+        return True
+
+    def reassign_label(self, old_label: str, new_label: str) -> bool:
+        """Reassign the label of an electrode."""
+        elec = next((e for e in self.labeled_electrodes if e.label == old_label), None)
+        if elec is None:
+            return False
+        elec.label = new_label
+        elec.manually_corrected = True
+        return True
