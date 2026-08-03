@@ -25,6 +25,7 @@ class MarkerType(Enum):
     BRAIN_TARGET = 2
     COIL_TARGET = 3
     COIL_POSE = 4
+    EEG_ELECTRODE = 5
 
     @property
     def human_readable(self):
@@ -36,6 +37,7 @@ class MarkerType(Enum):
             MarkerType.BRAIN_TARGET: "Brain Target",
             MarkerType.COIL_TARGET: "Coil Target",
             MarkerType.COIL_POSE: "Coil Pose",
+            MarkerType.EEG_ELECTRODE: "EEG Electrode",
         }
         # Return the human-readable name for the enum member.
         return names[self]

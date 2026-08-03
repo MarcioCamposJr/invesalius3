@@ -425,3 +425,39 @@ class EEGMontage(metaclass=Singleton):
         elec.label = new_label
         elec.manually_corrected = True
         return True
+
+    # --- Marker Integration ---
+
+    def create_markers(self) -> List[int]:
+        """
+        Instantiate Marker objects for each labeled electrode and add them to MarkersControl.
+        Returns the list of marker IDs created.
+        """
+        from invesalius.data.markers.marker import Marker, MarkerType
+        from invesalius.navigation.markers import MarkersControl
+
+        marker_ids = []
+        markers_control = MarkersControl()
+
+        for elec in self.labeled_electrodes:
+            marker = Marker()
+            marker.name = elec.label
+            marker.marker_type = MarkerType.EEG_ELECTRODE
+            # Store in InVesalius space
+            marker.coord = np.array(elec.position_inv)
+            # Default orientation
+            marker.orient = np.array([0, 0, 0])
+
+            # Map confidence to color (R, G, B in 0-1 range)
+            if elec.confidence == ConfidenceLevel.HIGH:
+                marker.colour = (0.0, 1.0, 0.0)
+            elif elec.confidence == ConfidenceLevel.MEDIUM:
+                marker.colour = (1.0, 1.0, 0.0)
+            else:
+                marker.colour = (1.0, 0.0, 0.0)
+
+            # Add to MarkersControl
+            marker_id = markers_control.AddMarker(marker)
+            marker_ids.append(marker_id)
+
+        return marker_ids
