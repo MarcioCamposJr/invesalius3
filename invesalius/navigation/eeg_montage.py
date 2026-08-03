@@ -225,3 +225,95 @@ class EEGMontage(metaclass=Singleton):
             self.point_cloud.pop(idx)
 
         return len(to_remove)
+
+    # --- Fiducial Registration and ICP ---
+
+    def set_fiducial(self, name: str, position: np.ndarray) -> None:
+        """Register an anatomical fiducial. name: 'nasion', 'lpa', 'rpa'."""
+        assert name in self.fiducials_inv
+        self.fiducials_inv[name] = np.array(position[:3])
+
+        if self.are_fiducials_set() and self.state == DigitizationState.TEMPLATE_SELECTED:
+            self.state = DigitizationState.FIDUCIALS_REGISTERED
+
+    def are_fiducials_set(self) -> bool:
+        """Return True if all three fiducials are set."""
+        return all(v is not None for v in self.fiducials_inv.values())
+
+    def compute_fiducial_alignment(self) -> np.ndarray:
+        """
+        Compute initial rigid alignment using the 3 fiducials.
+        Calculates transformation from MNE template space to InVesalius space.
+        Returns a 4x4 transformation matrix.
+        """
+        from invesalius.data import transformations as tr
+
+        # Source points: template fiducials
+        src = np.array(
+            [
+                self._template_fiducials["lpa"],
+                self._template_fiducials["rpa"],
+                self._template_fiducials["nasion"],
+            ]
+        )  # (3, 3)
+
+        # Target points: captured fiducials
+        dst = np.array(
+            [
+                self.fiducials_inv["lpa"],
+                self.fiducials_inv["rpa"],
+                self.fiducials_inv["nasion"],
+            ]
+        )  # (3, 3)
+
+        # affine_matrix_from_points(v0, v1) returns matrix mapping v0 to v1
+        m_fiducial = tr.affine_matrix_from_points(src.T, dst.T, shear=False, scale=False)
+
+        return m_fiducial
+
+    def apply_transform_to_template(self, transform: np.ndarray) -> np.ndarray:
+        """Apply a 4x4 transformation matrix to template positions."""
+        positions_h = np.hstack(
+            [self.template_positions, np.ones((len(self.template_positions), 1))]
+        )  # (N, 4)
+
+        transformed = (transform @ positions_h.T).T[:, :3]  # (N, 3)
+        return transformed
+
+    def _run_vtk_icp(self, source_points: np.ndarray, target_points: np.ndarray) -> np.ndarray:
+        """
+        Run ICP using VTK.
+        Source = template (to be moved), Target = captured cloud (fixed).
+        """
+        from vtkmodules.vtkCommonCore import vtkPoints
+        from vtkmodules.vtkCommonDataModel import vtkPolyData
+        from vtkmodules.vtkFiltersGeneral import vtkIterativeClosestPointTransform
+
+        src_vtk = vtkPoints()
+        for pt in source_points:
+            src_vtk.InsertNextPoint(pt)
+        src_poly = vtkPolyData()
+        src_poly.SetPoints(src_vtk)
+
+        tgt_vtk = vtkPoints()
+        for pt in target_points:
+            tgt_vtk.InsertNextPoint(pt)
+        tgt_poly = vtkPolyData()
+        tgt_poly.SetPoints(tgt_vtk)
+
+        icp = vtkIterativeClosestPointTransform()
+        icp.SetSource(src_poly)
+        icp.SetTarget(tgt_poly)
+        icp.GetLandmarkTransform().SetModeToRigidBody()
+        icp.SetMaximumNumberOfIterations(500)
+        icp.SetMaximumNumberOfLandmarks(len(source_points))
+        icp.Modified()
+        icp.Update()
+
+        m = np.eye(4)
+        vtk_matrix = icp.GetMatrix()
+        for i in range(4):
+            for j in range(4):
+                m[i, j] = vtk_matrix.GetElement(i, j)
+
+        return m
