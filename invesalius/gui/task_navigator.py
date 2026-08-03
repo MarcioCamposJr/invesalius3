@@ -2140,6 +2140,22 @@ class ControlPanel(wx.Panel):
         )
         self.show_motor_map_button = show_motor_map_button
 
+        # Button for EEG Digitization Wizard
+        tooltip = _("Digitize EEG Electrodes")
+        BMP_EEG = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("target.png")), wx.BITMAP_TYPE_PNG)
+        eeg_digitization_button = wx.ToggleButton(
+            scroll_panel, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        eeg_digitization_button.SetBackgroundColour(GREY_COLOR)
+        eeg_digitization_button.SetBitmap(BMP_EEG)
+        eeg_digitization_button.SetToolTip(tooltip)
+        eeg_digitization_button.SetValue(False)
+        eeg_digitization_button.Enable(True)
+        eeg_digitization_button.Bind(
+            wx.EVT_TOGGLEBUTTON, partial(self.OnEEGDigitization, ctrl=eeg_digitization_button)
+        )
+        self.eeg_digitization_button = eeg_digitization_button
+
         # Sizers
         start_navigation_button_sizer = wx.BoxSizer(wx.VERTICAL)
         start_navigation_button_sizer.AddMany(
@@ -2160,6 +2176,7 @@ class ControlPanel(wx.Panel):
                 (show_coil_button),
                 (show_probe_button),
                 (show_motor_map_button),
+                (eeg_digitization_button),
             ]
         )
 
@@ -2688,6 +2705,16 @@ class ControlPanel(wx.Panel):
         pressed = self.show_motor_map_button.GetValue()
         if self.mep_visualizer.DisplayMotorMap(show=pressed):
             self.UpdateToggleButton(self.show_motor_map_button)
+
+    def OnEEGDigitization(self, evt=None, ctrl=None):
+        if ctrl is not None:
+            self.UpdateToggleButton(ctrl, False)  # acts as a push button
+
+        # Import inside the method to avoid circular imports during startup
+        from invesalius.gui.dialogs import EEGDigitizationDialog
+
+        dlg = EEGDigitizationDialog(self.nav_hub)
+        dlg.Show()
 
 
 class MarkersPanel(wx.Panel, ColumnSorterMixin):
