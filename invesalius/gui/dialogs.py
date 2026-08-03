@@ -8492,9 +8492,9 @@ class EEGDigitizationDialog(wx.Dialog):
     Step 4: Results and Manual Overrides
     """
 
-    def __init__(self, nav_hub):
+    def __init__(self, parent, nav_hub):
         super().__init__(
-            nav_hub.window,
+            parent,
             -1,
             _("EEG Electrode Digitization Wizard"),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,

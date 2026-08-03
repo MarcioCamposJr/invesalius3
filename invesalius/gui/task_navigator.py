@@ -2714,7 +2714,7 @@ class ControlPanel(wx.Panel):
         # Import inside the method to avoid circular imports during startup
         from invesalius.gui.dialogs import EEGDigitizationDialog
 
-        dlg = EEGDigitizationDialog(self.nav_hub)
+        dlg = EEGDigitizationDialog(self, self.nav_hub)
         dlg.Show()
 
 
