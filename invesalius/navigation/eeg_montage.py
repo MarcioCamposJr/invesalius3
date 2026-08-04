@@ -92,6 +92,7 @@ class EEGMontage(metaclass=Singleton):
         # Matching results
         self.labeled_electrodes: List[LabeledElectrode] = []
         self.icp_transform: Optional[np.ndarray] = None  # (4,4) affine matrix
+        self.head_scale_factor: float = 1.0  # captured/template head size ratio
         self.mean_error_mm: Optional[float] = None
         self.show_electrodes: bool = True
 
@@ -302,6 +303,7 @@ class EEGMontage(metaclass=Singleton):
         """
         Compute initial rigid alignment using the 3 fiducials.
         Calculates transformation from MNE template space to InVesalius space.
+        Includes uniform scaling to compensate for head size differences.
         Returns a 4x4 transformation matrix.
         """
         from invesalius.data import transformations as tr
@@ -324,10 +326,34 @@ class EEGMontage(metaclass=Singleton):
             ]
         )  # (3, 3)
 
-        # affine_matrix_from_points(v0, v1) returns matrix mapping v0 to v1
-        m_fiducial = tr.affine_matrix_from_points(src.T, dst.T, shear=False, scale=False)
+        # Compute uniform scale factor from inter-fiducial distances
+        self.head_scale_factor = self._compute_scale_factor(src, dst)
+
+        # affine_matrix_from_points with scale=True computes rigid + uniform scale
+        # This compensates for head size differences between template and patient
+        m_fiducial = tr.affine_matrix_from_points(src.T, dst.T, shear=False, scale=True)
 
         return m_fiducial
+
+    @staticmethod
+    def _compute_scale_factor(template_fids: np.ndarray, captured_fids: np.ndarray) -> float:
+        """
+        Compute uniform scale factor from inter-fiducial distances.
+        Compares LPA-RPA, LPA-Nasion, RPA-Nasion distances between template
+        and captured fiducials to determine the head size ratio.
+
+        Returns: scale factor (captured_size / template_size).
+        Values > 1.0 mean the patient's head is larger than the template.
+        """
+        # Inter-fiducial distance pairs: (LPA-RPA), (LPA-Nasion), (RPA-Nasion)
+        pairs = [(0, 1), (0, 2), (1, 2)]
+
+        template_dists = [np.linalg.norm(template_fids[i] - template_fids[j]) for i, j in pairs]
+        captured_dists = [np.linalg.norm(captured_fids[i] - captured_fids[j]) for i, j in pairs]
+
+        # Ratio of each pair, then take the mean for a robust estimate
+        ratios = [c / t for c, t in zip(captured_dists, template_dists) if t > 0]
+        return float(np.mean(ratios)) if ratios else 1.0
 
     def apply_transform_to_template(self, transform: np.ndarray) -> np.ndarray:
         """Apply a 4x4 transformation matrix to template positions."""
