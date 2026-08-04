@@ -8574,11 +8574,16 @@ class EEGDigitizationDialog(wx.Dialog):
         self.results_list.InsertColumn(1, _("Matched Name"), width=100)
         self.results_list.InsertColumn(2, _("Distance (mm)"), width=100)
         self.results_list.InsertColumn(3, _("Confidence"), width=100)
+        self.results_list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.OnRightClickItem)
         right_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 5)
 
         btn_process = wx.Button(right_panel, -1, _("Process and Match Electrodes"))
         btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
         right_sizer.Add(btn_process, 0, wx.EXPAND | wx.ALL, 5)
+
+        btn_clear = wx.Button(right_panel, -1, _("Clear All Points"))
+        btn_clear.Bind(wx.EVT_BUTTON, self.OnClearAll)
+        right_sizer.Add(btn_clear, 0, wx.EXPAND | wx.ALL, 5)
 
         right_panel.SetSizer(right_sizer)
 
@@ -8654,6 +8659,7 @@ class EEGDigitizationDialog(wx.Dialog):
                     self.ren.AddActor(actor)
 
         self.ren.ResetCamera()
+        self._refresh_list()
 
     def _create_torus_actor(self, position, color):
         import math
@@ -8757,28 +8763,101 @@ class EEGDigitizationDialog(wx.Dialog):
         self.ren.ResetCameraClippingRange()
         self.interactor.Render()
 
-    def OnCaptureElectrode(self, evt=None):
-        if self.current_coord is not None:
-            # Add VTK Torus & project
-            actor, final_coord, target_z = self._create_torus_actor(
-                self.current_coord, (0.5, 0.5, 0.5)
-            )  # Default gray
+    def _refresh_list(self):
+        # Clear existing actors
+        for actor in self.electrode_actors.values():
+            self.ren.RemoveActor(actor)
+        self.electrode_actors.clear()
 
-            count = len(self.eeg_montage.point_cloud)
-            name = f"E{count + 1}"
-            self.eeg_montage.add_point(final_coord)
+        # Clear list
+        self.results_list.DeleteAllItems()
 
-            # Add to table
-            idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
-            self.results_list.SetItem(idx, 1, "-")
-            self.results_list.SetItem(idx, 2, "-")
-            self.results_list.SetItem(idx, 3, "-")
+        # Re-add from point_cloud
+        has_matches = (
+            hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels
+        )
 
+        for i, coord in enumerate(self.eeg_montage.point_cloud):
+            name = f"E{i + 1}"
+
+            color = (0.5, 0.5, 0.5)
+            text_color = wx.Colour(100, 100, 100)
+
+            label = "-"
+            distance = "-"
+            confidence = "-"
+
+            if has_matches and i < len(self.eeg_montage.matched_labels):
+                res = self.eeg_montage.matched_labels[i]
+                label = res.label
+                name = label
+                distance = f"{res.distance_mm:.2f}" if res.distance_mm is not None else "N/A"
+                confidence = res.confidence.value.capitalize()
+
+                if res.confidence.value == "high":
+                    color = (0.0, 1.0, 0.0)
+                    text_color = wx.Colour(0, 150, 0)
+                elif res.confidence.value == "medium":
+                    color = (1.0, 1.0, 0.0)
+                    text_color = wx.Colour(204, 204, 0)
+                elif res.confidence.value == "low":
+                    color = (1.0, 0.0, 0.0)
+                    text_color = wx.Colour(200, 0, 0)
+
+            actor, final_coord, target_z = self._create_torus_actor(coord, color)
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
-            self._focus_camera(final_coord, normal=target_z)
+            idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
+            self.results_list.SetItem(idx, 1, label)
+            self.results_list.SetItem(idx, 2, distance)
+            self.results_list.SetItem(idx, 3, confidence)
+
+            if has_matches:
+                self.results_list.SetItemTextColour(idx, text_color)
+
+        if hasattr(self, "interactor"):
             self.interactor.Render()
+
+    def OnRightClickItem(self, evt):
+        self.selected_item = evt.GetIndex()
+        menu = wx.Menu()
+        item = menu.Append(wx.ID_ANY, _("Delete Point"))
+        self.Bind(wx.EVT_MENU, self.OnDeletePoint, item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def OnDeletePoint(self, evt):
+        if hasattr(self, "selected_item") and self.selected_item >= 0:
+            idx = self.selected_item
+            if idx < len(self.eeg_montage.point_cloud):
+                self.eeg_montage.point_cloud.pop(idx)
+                if (
+                    hasattr(self.eeg_montage, "matched_labels")
+                    and self.eeg_montage.matched_labels
+                    and idx < len(self.eeg_montage.matched_labels)
+                ):
+                    self.eeg_montage.matched_labels.pop(idx)
+            self._refresh_list()
+
+    def OnClearAll(self, evt):
+        self.eeg_montage.point_cloud.clear()
+        if hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels:
+            self.eeg_montage.matched_labels.clear()
+        self._refresh_list()
+
+    def OnCaptureElectrode(self, evt=None):
+        if self.current_coord is not None:
+            if hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels:
+                self.eeg_montage.matched_labels.clear()
+
+            self.eeg_montage.add_point(self.current_coord)
+            coord = self.eeg_montage.point_cloud[-1]
+
+            _, final_coord, target_z = self._create_torus_actor(coord, (0.5, 0.5, 0.5))
+
+            self._refresh_list()
+            self._focus_camera(final_coord, normal=target_z)
         else:
             wx.MessageBox(
                 _("No spatial tracker coordinate received yet. Make sure navigation is active."),
@@ -8821,35 +8900,8 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.filter_duplicates()
             mean_err, results = self.eeg_montage.run_icp_matching()
 
-            # Update Table and Colors
-            self.results_list.DeleteAllItems()
-            for res in results:
-                # Refresh table
-                idx = self.results_list.InsertItem(self.results_list.GetItemCount(), res.label)
-                self.results_list.SetItem(idx, 1, res.label)
-
-                dist_str = f"{res.distance_mm:.2f}" if res.distance_mm is not None else "N/A"
-                self.results_list.SetItem(idx, 2, dist_str)
-                self.results_list.SetItem(idx, 3, res.confidence.value.capitalize())
-
-                # Colors
-                color = (0.5, 0.5, 0.5)
-                text_color = wx.Colour(100, 100, 100)
-                if res.confidence.value == "high":
-                    color = (0.0, 1.0, 0.0)  # Green
-                    text_color = wx.Colour(0, 150, 0)
-                elif res.confidence.value == "medium":
-                    color = (1.0, 1.0, 0.0)  # Yellow
-                    text_color = wx.Colour(204, 204, 0)
-                elif res.confidence.value == "low":
-                    color = (1.0, 0.0, 0.0)  # Red
-                    text_color = wx.Colour(200, 0, 0)
-
-                self.results_list.SetItemTextColour(idx, text_color)
-
-                # Update Actor color
-                if res.label in self.electrode_actors:
-                    self.electrode_actors[res.label].GetProperty().SetColor(color)
+            self.eeg_montage.matched_labels = results
+            self._refresh_list()
 
             self.interactor.Render()
             wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
