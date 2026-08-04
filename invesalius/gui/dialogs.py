@@ -8835,10 +8835,48 @@ class EEGDigitizationDialog(wx.Dialog):
     def OnRightClickItem(self, evt):
         self.selected_item = evt.GetIndex()
         menu = wx.Menu()
+
+        if (
+            hasattr(self.eeg_montage, "matched_labels")
+            and self.eeg_montage.matched_labels
+            and self.selected_item < len(self.eeg_montage.matched_labels)
+        ):
+            change_lbl_item = menu.Append(wx.ID_ANY, _("Change Label..."))
+            self.Bind(wx.EVT_MENU, self.OnChangeLabel, change_lbl_item)
+            menu.AppendSeparator()
+
         item = menu.Append(wx.ID_ANY, _("Delete Point"))
         self.Bind(wx.EVT_MENU, self.OnDeletePoint, item)
         self.PopupMenu(menu)
         menu.Destroy()
+
+    def OnChangeLabel(self, evt):
+        if not (hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels):
+            return
+
+        idx = getattr(self, "selected_item", -1)
+        if idx < 0 or idx >= len(self.eeg_montage.matched_labels):
+            return
+
+        current_lbl = self.eeg_montage.matched_labels[idx]
+        available_labels = getattr(self.eeg_montage, "template_labels", [])
+        if not available_labels:
+            return
+
+        dlg = wx.SingleChoiceDialog(
+            self,
+            _("Select a new label for this electrode:"),
+            _("Change Label"),
+            available_labels,
+        )
+        if current_lbl in available_labels:
+            dlg.SetSelection(available_labels.index(current_lbl))
+
+        if dlg.ShowModal() == wx.ID_OK:
+            new_label = dlg.GetStringSelection()
+            self.eeg_montage.matched_labels[idx] = new_label
+            self._refresh_list()
+        dlg.Destroy()
 
     def OnDeletePoint(self, evt):
         if hasattr(self, "selected_item") and self.selected_item >= 0:
