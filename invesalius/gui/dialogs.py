@@ -8623,24 +8623,47 @@ class EEGDigitizationDialog(wx.Dialog):
             last_idx = max(proj.surface_dict.keys())
             surface = proj.surface_dict[last_idx]
             if surface and hasattr(surface, "polydata"):
-                mapper = vtkPolyDataMapper()
-                mapper.SetInputData(surface.polydata)
-                actor = vtkActor()
-                actor.SetMapper(mapper)
-                actor.GetProperty().SetOpacity(0.8)
-                actor.GetProperty().SetColor(0.7, 0.7, 0.7)
-                self.ren.AddActor(actor)
+                self.polydata = surface.polydata
+
+                self.surface_locator = vtk.vtkCellLocator()
+                self.surface_locator.SetDataSet(self.polydata)
+                self.surface_locator.BuildLocator()
+
+                self.surface_normals = self.polydata.GetCellData().GetNormals()
+                if not self.surface_normals:
+                    norm = vtk.vtkPolyDataNormals()
+                    norm.SetInputData(self.polydata)
+                    norm.ComputePointNormalsOn()
+                    norm.ComputeCellNormalsOn()
+                    norm.Update()
+                    self.polydata = norm.GetOutput()
+                    self.surface_normals = self.polydata.GetCellData().GetNormals()
+
+                if self.polydata:
+                    mapper = vtkPolyDataMapper()
+                    mapper.SetInputData(self.polydata)
+
+                    actor = vtkActor()
+                    actor.SetMapper(mapper)
+                    actor.GetProperty().SetOpacity(0.8)
+                    actor.GetProperty().SetColor(*surface.colour[:3])
+                    self.ren.AddActor(actor)
 
         self.ren.ResetCamera()
 
     def _create_torus_actor(self, position, color):
+        import math
+
+        import numpy as np
+        import vtk
         from vtkmodules.vtkCommonComputationalGeometry import vtkParametricTorus
+        from vtkmodules.vtkCommonTransforms import vtkTransform
         from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
         from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
 
         torus = vtkParametricTorus()
-        torus.SetRingRadius(4.0)
-        torus.SetCrossSectionRadius(1.5)
+        torus.SetRingRadius(3.0)
+        torus.SetCrossSectionRadius(0.8)
 
         source = vtkParametricFunctionSource()
         source.SetParametricFunction(torus)
@@ -8652,9 +8675,42 @@ class EEGDigitizationDialog(wx.Dialog):
         actor = vtkActor()
         actor.SetMapper(mapper)
         actor.GetProperty().SetColor(color)
-        actor.SetPosition(position)
 
-        return actor
+        if hasattr(self, "surface_locator") and self.surface_locator is not None:
+            closest_point = [0.0, 0.0, 0.0]
+            cell_id = vtk.reference(0)
+            sub_id = vtk.reference(0)
+            dist2 = vtk.reference(0.0)
+
+            self.surface_locator.FindClosestPoint(position, closest_point, cell_id, sub_id, dist2)
+
+            target_z = np.array(self.surface_normals.GetTuple(cell_id.get()))
+            if np.linalg.norm(target_z) > 1e-6:
+                target_z = target_z / np.linalg.norm(target_z)
+            else:
+                target_z = np.array([0, 0, 1])
+
+            source_z = np.array([0, 0, 1])
+            axis = np.cross(source_z, target_z)
+            axis_norm = np.linalg.norm(axis)
+
+            transform = vtkTransform()
+            transform.Translate(closest_point)
+
+            if axis_norm > 1e-6:
+                axis = axis / axis_norm
+                angle = math.degrees(math.acos(np.dot(source_z, target_z)))
+                transform.RotateWXYZ(angle, axis[0], axis[1], axis[2])
+            elif np.dot(source_z, target_z) < 0:
+                transform.RotateWXYZ(180, 1, 0, 0)
+
+            actor.SetUserTransform(transform)
+            final_pos = closest_point
+        else:
+            actor.SetPosition(position)
+            final_pos = position
+
+        return actor, final_pos
 
     def _focus_camera(self, position):
         import numpy as np
@@ -8678,9 +8734,14 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
+            # Add VTK Torus & project
+            actor, final_coord = self._create_torus_actor(
+                self.current_coord, (0.5, 0.5, 0.5)
+            )  # Default gray
+
             count = len(self.eeg_montage.point_cloud)
             name = f"E{count + 1}"
-            self.eeg_montage.add_point(self.current_coord)
+            self.eeg_montage.add_point(final_coord)
 
             # Add to table
             idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
@@ -8688,8 +8749,6 @@ class EEGDigitizationDialog(wx.Dialog):
             self.results_list.SetItem(idx, 2, "-")
             self.results_list.SetItem(idx, 3, "-")
 
-            # Add VTK Torus
-            actor = self._create_torus_actor(self.current_coord, (0.5, 0.5, 0.5))  # Default gray
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
