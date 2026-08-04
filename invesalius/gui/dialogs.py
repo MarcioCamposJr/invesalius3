@@ -8890,7 +8890,7 @@ class EEGDigitizationDialog(wx.Dialog):
             actor = self.electrode_actors.get(edata["name"])
             if actor:
                 if i == idx:
-                    actor.GetProperty().SetColor(1.0, 1.0, 0.0)  # Yellow highlight
+                    actor.GetProperty().SetColor(0.0, 0.5, 1.0)  # Blue highlight
                 else:
                     actor.GetProperty().SetColor(edata["color"])
 
