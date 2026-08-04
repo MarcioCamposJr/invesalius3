@@ -8597,7 +8597,7 @@ class EEGDigitizationDialog(wx.Dialog):
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         self.cb_show_electrodes = wx.CheckBox(self, -1, _("Show Electrodes"))
-        self.cb_show_electrodes.SetValue(True)
+        self.cb_show_electrodes.SetValue(self.eeg_montage.show_electrodes)
         self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
         bottom_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
@@ -8626,6 +8626,7 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.load_template(template)
 
     def _init_vtk(self):
+        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
         from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
 
         import invesalius.project as prj
@@ -8634,6 +8635,9 @@ class EEGDigitizationDialog(wx.Dialog):
         self.ren = vtkRenderer()
         self.ren.SetBackground(0.0, 0.0, 0.0)
         self.interactor.GetRenderWindow().AddRenderer(self.ren)
+
+        style = vtkInteractorStyleTrackballCamera()
+        self.interactor.SetInteractorStyle(style)
 
         # Load head surface from project
         proj = prj.Project()
@@ -9025,6 +9029,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def OnToggleShowElectrodes(self, evt):
         show = self.cb_show_electrodes.GetValue()
+        self.eeg_montage.show_electrodes = show
         Publisher.sendMessage("Toggle EEG electrodes visibility", show=show)
 
     def OnExport(self, evt):

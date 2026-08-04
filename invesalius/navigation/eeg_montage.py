@@ -93,6 +93,7 @@ class EEGMontage(metaclass=Singleton):
         self.labeled_electrodes: List[LabeledElectrode] = []
         self.icp_transform: Optional[np.ndarray] = None  # (4,4) affine matrix
         self.mean_error_mm: Optional[float] = None
+        self.show_electrodes: bool = True
 
     def reset(self) -> None:
         """Reset the state for a new digitization session."""
