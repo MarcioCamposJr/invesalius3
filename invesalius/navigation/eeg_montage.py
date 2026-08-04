@@ -450,12 +450,12 @@ class EEGMontage(metaclass=Singleton):
 
         for elec in self.labeled_electrodes:
             marker = Marker()
-            marker.name = elec.label
+            marker.label = elec.label
             marker.marker_type = MarkerType.EEG_ELECTRODE
             # Store in InVesalius space
-            marker.coord = np.array(elec.position_inv)
+            marker.position = list(elec.position_inv)
             # Default orientation
-            marker.orient = np.array([0, 0, 0])
+            marker.orientation = [0, 0, 0]
 
             # Map confidence to color (R, G, B in 0-1 range)
             if elec.confidence == ConfidenceLevel.HIGH:

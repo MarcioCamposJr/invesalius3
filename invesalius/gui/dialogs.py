@@ -8819,7 +8819,10 @@ class EEGDigitizationDialog(wx.Dialog):
                     color = (1.0, 0.0, 0.0)
                     text_color = wx.Colour(200, 0, 0)
 
-            actor, final_coord, target_z = self._create_torus_actor(coord, color)
+            # Convert from InVesalius space to VTK space (negate Y) for rendering
+            vtk_coord = list(coord)
+            vtk_coord[1] = -vtk_coord[1]
+            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, color)
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
@@ -8918,7 +8921,10 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.add_point(self.current_coord)
             coord = self.eeg_montage.point_cloud[-1]
 
-            actor, final_coord, target_z = self._create_torus_actor(coord, (0.5, 0.5, 0.5))
+            # Convert from InVesalius space to VTK space (negate Y) for rendering
+            vtk_coord = list(coord)
+            vtk_coord[1] = -vtk_coord[1]
+            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, (0.5, 0.5, 0.5))
 
             self._refresh_list()
             self._focus_camera(final_coord, normal=target_z)
