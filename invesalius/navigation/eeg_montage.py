@@ -357,10 +357,11 @@ class EEGMontage(metaclass=Singleton):
         # Step 3: ICP refinement
         if progress_callback:
             progress_callback(2, _("ICP refinement..."))
-        m_icp = self._run_vtk_icp(
-            source_points=template_aligned,
-            target_points=self.get_point_cloud_array(),
+        m_icp_inv = self._run_vtk_icp(
+            source_points=self.get_point_cloud_array(),
+            target_points=template_aligned,
         )
+        m_icp = np.linalg.inv(m_icp_inv)
 
         # Total transform
         self.icp_transform = m_icp @ m_fiducial
