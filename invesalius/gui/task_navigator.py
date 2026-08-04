@@ -2744,7 +2744,7 @@ class ControlPanel(wx.Panel):
         dlg = EEGDigitizationDialog(self, self.nav_hub)
         dlg.Show()
 
-    def OnUpdateEEGElectrodes(self, electrodes_data):
+    def OnUpdateEEGElectrodes(self, electrodes_data, show=True):
         self.eeg_has_electrodes = len(electrodes_data) > 0
         self.UpdateEEGButtonColor()
 
