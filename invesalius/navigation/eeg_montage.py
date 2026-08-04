@@ -99,6 +99,45 @@ class EEGMontage(metaclass=Singleton):
         """Reset the state for a new digitization session."""
         self.__init__()
 
+    def SaveState(self) -> None:
+        import invesalius.session as ses
+
+        state = {
+            "template_name": self.template_name,
+            "show_electrodes": self.show_electrodes,
+            "point_cloud": [p.tolist() for p in self.point_cloud],
+            "matched_labels": [
+                {
+                    "label": res.label,
+                    "distance_mm": res.distance_mm,
+                    "confidence": res.confidence.value,
+                }
+                for res in getattr(self, "matched_labels", [])
+            ],
+        }
+        ses.Session().SetState("eeg_montage", state)
+
+    def LoadState(self) -> None:
+        import invesalius.session as ses
+
+        state = ses.Session().GetState("eeg_montage")
+        if not state:
+            return
+
+        self.template_name = state.get("template_name", "standard_1020")
+        self.show_electrodes = state.get("show_electrodes", True)
+        self.point_cloud = [np.array(p) for p in state.get("point_cloud", [])]
+
+        if self.template_name:
+            self.load_template(self.template_name)
+
+        if "matched_labels" in state:
+            self.matched_labels = []
+            for m in state["matched_labels"]:
+                conf = ConfidenceLevel(m["confidence"])
+                res = MatchResult(label=m["label"], distance_mm=m["distance_mm"], confidence=conf)
+                self.matched_labels.append(res)
+
     # --- Template Loading (via MNE) ---
 
     @staticmethod
@@ -154,12 +193,14 @@ class EEGMontage(metaclass=Singleton):
         self.point_cloud.append(np.array(position[:3]))
         if self.state == DigitizationState.FIDUCIALS_REGISTERED:
             self.state = DigitizationState.CAPTURING_POINTS
+        self.SaveState()
         return len(self.point_cloud) - 1
 
     def remove_last_point(self) -> bool:
         """Remove the last captured point."""
         if self.point_cloud:
             self.point_cloud.pop()
+            self.SaveState()
             return True
         return False
 
@@ -167,6 +208,7 @@ class EEGMontage(metaclass=Singleton):
         """Remove a point at a specific index."""
         if 0 <= index < len(self.point_cloud):
             self.point_cloud.pop(index)
+            self.SaveState()
             return True
         return False
 

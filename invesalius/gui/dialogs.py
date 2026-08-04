@@ -8513,6 +8513,10 @@ class EEGDigitizationDialog(wx.Dialog):
 
         self.Bind(wx.EVT_CLOSE, self.OnCloseEvent)
 
+        # Load persisted EEG state from project session
+        self.eeg_montage.LoadState()
+        self._refresh_list()
+
     def OnUpdateCoord(self, position):
         self.current_coord = list(position[:3])
 
@@ -9068,6 +9072,7 @@ class EEGDigitizationDialog(wx.Dialog):
             progress.Destroy()
 
             self.eeg_montage.matched_labels = results
+            self.eeg_montage.SaveState()
             self._refresh_list()
 
             self.interactor.Render()
@@ -9079,6 +9084,7 @@ class EEGDigitizationDialog(wx.Dialog):
     def OnToggleShowElectrodes(self, evt):
         show = self.cb_show_electrodes.GetValue()
         self.eeg_montage.show_electrodes = show
+        self.eeg_montage.SaveState()
         Publisher.sendMessage("Toggle EEG electrodes visibility", show=show)
 
     def OnExport(self, evt):
