@@ -1070,6 +1070,11 @@ class Viewer(wx.Panel):
             except Exception:
                 pass
 
+        # Clear EEG electrodes
+        for actor in self.eeg_actors.values():
+            self.ren.RemoveActor(actor)
+        self.eeg_actors.clear()
+
         if self.raycasting_volume:
             self.raycasting_volume = False
 

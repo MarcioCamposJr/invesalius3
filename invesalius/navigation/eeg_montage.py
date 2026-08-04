@@ -96,6 +96,52 @@ class EEGMontage(metaclass=Singleton):
         self.mean_error_mm: Optional[float] = None
         self.show_electrodes: bool = True
 
+        from pubsub import pub as Publisher
+
+        Publisher.subscribe(self._on_enable_state_project, "Enable state project")
+
+    def _on_enable_state_project(self, state: bool) -> None:
+        if state:
+            self.LoadState()
+            self._broadcast_electrodes()
+
+    def _broadcast_electrodes(self) -> None:
+        from pubsub import pub as Publisher
+
+        has_matches = bool(self.labeled_electrodes)
+        eeg_data = []
+
+        for i, coord in enumerate(self.point_cloud):
+            name = f"E{i + 1}"
+            color = (0.5, 0.5, 0.5)
+
+            if has_matches and i < len(self.labeled_electrodes):
+                res = self.labeled_electrodes[i]
+                name = res.label
+                if res.confidence.value == "high":
+                    color = (0.0, 1.0, 0.0)
+                elif res.confidence.value == "medium":
+                    color = (1.0, 1.0, 0.0)
+                elif res.confidence.value == "low":
+                    color = (1.0, 0.0, 0.0)
+
+            # Convert to VTK space (negate Y)
+            vtk_coord = list(coord)
+            vtk_coord[1] = -vtk_coord[1]
+
+            eeg_data.append(
+                {
+                    "name": name,
+                    "position": vtk_coord,
+                    "normal": [0.0, 0.0, 1.0],  # Default normal, re-projected when dialog opens
+                    "color": color,
+                }
+            )
+
+        Publisher.sendMessage(
+            "Update EEG electrodes", electrodes_data=eeg_data, show=self.show_electrodes
+        )
+
     def reset(self) -> None:
         """Reset the state for a new digitization session."""
         self.__init__()
@@ -110,6 +156,9 @@ class EEGMontage(metaclass=Singleton):
             "labeled_electrodes": [
                 {
                     "label": elec.label,
+                    "position_inv": elec.position_inv.tolist(),
+                    "position_world": elec.position_world.tolist(),
+                    "template_position": elec.template_position.tolist(),
                     "distance_mm": elec.distance_mm,
                     "confidence": elec.confidence.value,
                 }
@@ -132,18 +181,22 @@ class EEGMontage(metaclass=Singleton):
         if self.template_name:
             self.load_template(self.template_name)
 
-        # Support both old key "matched_labels" and new key "labeled_electrodes"
         elec_data = state.get("labeled_electrodes", state.get("matched_labels", []))
         if elec_data:
             self.labeled_electrodes = []
             _zero = np.zeros(3)
             for m in elec_data:
                 conf = ConfidenceLevel(m["confidence"])
+
+                pos_inv = np.array(m.get("position_inv", _zero))
+                pos_world = np.array(m.get("position_world", _zero))
+                tmpl_pos = np.array(m.get("template_position", _zero))
+
                 elec = LabeledElectrode(
                     label=m["label"],
-                    position_inv=_zero,
-                    position_world=_zero,
-                    template_position=_zero,
+                    position_inv=pos_inv,
+                    position_world=pos_world,
+                    template_position=tmpl_pos,
                     distance_mm=m["distance_mm"],
                     confidence=conf,
                 )
