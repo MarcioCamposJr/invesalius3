@@ -125,6 +125,10 @@ class EEGMontage(metaclass=Singleton):
 
         self.template_labels = list(ch_pos.keys())
         self.template_positions = np.array(list(ch_pos.values())) * 1000  # meters to mm
+
+        # MNE is RAS (Y=Anterior). InVesalius is RPS (Y=Posterior). Invert Y to match InVesalius space.
+        self.template_positions[:, 1] = -self.template_positions[:, 1]
+
         self.template_name = template_name
 
         # Extract fiducials from the template (in MNE frame)
@@ -134,10 +138,11 @@ class EEGMontage(metaclass=Singleton):
             "rpa": positions_dict.get("rpa"),
         }
 
-        # Convert fiducials to mm
+        # Convert fiducials to mm and invert Y
         for key in self._template_fiducials:
             if self._template_fiducials[key] is not None:
                 self._template_fiducials[key] = self._template_fiducials[key] * 1000
+                self._template_fiducials[key][1] = -self._template_fiducials[key][1]
 
         self.state = DigitizationState.TEMPLATE_SELECTED
 
