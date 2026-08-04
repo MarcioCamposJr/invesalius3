@@ -8671,7 +8671,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
                     actor = vtkActor()
                     actor.SetMapper(mapper)
-                    actor.GetProperty().SetOpacity(0.95)
+                    actor.GetProperty().SetOpacity(1.0)
                     actor.GetProperty().SetColor(*surface.colour[:3])
                     mapper.ScalarVisibilityOff()
                     self.ren.AddActor(actor)
@@ -8952,7 +8952,56 @@ class EEGDigitizationDialog(wx.Dialog):
             if hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels:
                 self.eeg_montage.matched_labels.clear()
 
-            self.eeg_montage.add_point(self.current_coord)
+            import numpy as np
+
+            projected_coord = list(self.current_coord)
+
+            try:
+                if hasattr(self, "nav_hub") and hasattr(self.nav_hub, "markers"):
+                    surf_geom = self.nav_hub.markers.transformator.surface_geometry
+
+                    # Convert to VTK space for the surface geometry locator
+                    vtk_coord = list(self.current_coord)
+                    vtk_coord[1] = -vtk_coord[1]
+
+                    closest_point, closest_normal = surf_geom.GetClosestPointOnSurface(
+                        "scalp", vtk_coord
+                    )
+
+                    if closest_point is not None:
+                        # Convert back to InVesalius space
+                        projected_coord = list(closest_point)
+                        projected_coord[1] = -projected_coord[1]
+
+                        dist_mm = np.linalg.norm(
+                            np.array(self.current_coord) - np.array(projected_coord)
+                        )
+                        if dist_mm > 3.0:
+                            msg = (
+                                _(
+                                    "The projection to the scalp surface moved the electrode by %.1f mm "
+                                    "(above the 3 mm limit). This may indicate an inaccuracy during the click.\n\n"
+                                    "Do you want to keep this electrode anyway?"
+                                )
+                                % dist_mm
+                            )
+
+                            dlg = wx.MessageDialog(
+                                self,
+                                msg,
+                                _("Displacement Warning"),
+                                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                            )
+                            result = dlg.ShowModal()
+                            dlg.Destroy()
+
+                            if result != wx.ID_YES:
+                                return  # Abort point capture
+
+            except Exception as e:
+                print("Error projecting electrode:", e)
+
+            self.eeg_montage.add_point(projected_coord)
             coord = self.eeg_montage.point_cloud[-1]
 
             # Convert from InVesalius space to VTK space (negate Y) for rendering
