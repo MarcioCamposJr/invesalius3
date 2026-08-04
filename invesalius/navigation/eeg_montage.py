@@ -31,7 +31,7 @@ Responsibility:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -319,7 +319,9 @@ class EEGMontage(metaclass=Singleton):
 
     # --- Matching Pipeline and Labeling ---
 
-    def run_icp_matching(self) -> Tuple[float, List[LabeledElectrode]]:
+    def run_icp_matching(
+        self, progress_callback: Optional[Callable[[int, str], None]] = None
+    ) -> Tuple[float, List[LabeledElectrode]]:
         """
         Complete Point Cloud Matching pipeline:
         1. Filter duplicates and outliers
@@ -341,14 +343,20 @@ class EEGMontage(metaclass=Singleton):
             raise ValueError("Insufficient point cloud (minimum 3 points)")
 
         # Step 1: Filter
+        if progress_callback:
+            progress_callback(0, _("Filtering points..."))
         self.filter_duplicates()
         self.filter_outliers()
 
         # Step 2: Fiducial alignment
+        if progress_callback:
+            progress_callback(1, _("Initial fiducial alignment..."))
         m_fiducial = self.compute_fiducial_alignment()
         template_aligned = self.apply_transform_to_template(m_fiducial)
 
         # Step 3: ICP refinement
+        if progress_callback:
+            progress_callback(2, _("ICP refinement..."))
         m_icp = self._run_vtk_icp(
             source_points=template_aligned,
             target_points=self.get_point_cloud_array(),
@@ -359,6 +367,8 @@ class EEGMontage(metaclass=Singleton):
         template_final = self.apply_transform_to_template(self.icp_transform)
 
         # Step 4: Labeling (Hungarian assignment)
+        if progress_callback:
+            progress_callback(3, _("Labeling assignments..."))
         point_cloud = self.get_point_cloud_array()
         cost_matrix = cdist(point_cloud, template_final)  # (M, N)
 

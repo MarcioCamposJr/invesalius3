@@ -8953,10 +8953,24 @@ class EEGDigitizationDialog(wx.Dialog):
             if template:
                 self.eeg_montage.load_template(template)
 
-            self.eeg_montage.compute_fiducial_alignment()
-            self.eeg_montage.filter_outliers()
-            self.eeg_montage.filter_duplicates()
-            mean_err, results = self.eeg_montage.run_icp_matching()
+            progress = wx.ProgressDialog(
+                _("Processing Electrodes"),
+                _("Initializing..."),
+                maximum=4,
+                parent=self,
+                style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE,
+            )
+
+            def progress_callback(step: int, msg: str):
+                progress.Update(step, msg)
+                wx.Yield()
+
+            mean_err, results = self.eeg_montage.run_icp_matching(
+                progress_callback=progress_callback
+            )
+
+            progress.Update(4, _("Done!"))
+            progress.Destroy()
 
             self.eeg_montage.matched_labels = results
             self._refresh_list()
