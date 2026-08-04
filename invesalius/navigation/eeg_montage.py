@@ -364,43 +364,6 @@ class EEGMontage(metaclass=Singleton):
         transformed = (transform @ positions_h.T).T[:, :3]  # (N, 3)
         return transformed
 
-    def _run_vtk_icp(self, source_points: np.ndarray, target_points: np.ndarray) -> np.ndarray:
-        """
-        Run ICP using VTK.
-        Source = template (to be moved), Target = captured cloud (fixed).
-        """
-        from vtkmodules.vtkCommonCore import vtkPoints
-        from vtkmodules.vtkCommonDataModel import vtkIterativeClosestPointTransform, vtkPolyData
-
-        src_vtk = vtkPoints()
-        for pt in source_points:
-            src_vtk.InsertNextPoint(pt)
-        src_poly = vtkPolyData()
-        src_poly.SetPoints(src_vtk)
-
-        tgt_vtk = vtkPoints()
-        for pt in target_points:
-            tgt_vtk.InsertNextPoint(pt)
-        tgt_poly = vtkPolyData()
-        tgt_poly.SetPoints(tgt_vtk)
-
-        icp = vtkIterativeClosestPointTransform()
-        icp.SetSource(src_poly)
-        icp.SetTarget(tgt_poly)
-        icp.GetLandmarkTransform().SetModeToRigidBody()
-        icp.SetMaximumNumberOfIterations(500)
-        icp.SetMaximumNumberOfLandmarks(len(source_points))
-        icp.Modified()
-        icp.Update()
-
-        m = np.eye(4)
-        vtk_matrix = icp.GetMatrix()
-        for i in range(4):
-            for j in range(4):
-                m[i, j] = vtk_matrix.GetElement(i, j)
-
-        return m
-
     # --- Matching Pipeline and Labeling ---
 
     def run_icp_matching(
@@ -453,33 +416,23 @@ class EEGMontage(metaclass=Singleton):
 
         template_subset = template_aligned[subset_indices]
 
-        # Step 4: Iterative ICP + Hungarian refinement
+        # Step 4: Iterative Assignment + Kabsch refinement
         if progress_callback:
-            progress_callback(2, _("ICP refinement..."))
+            progress_callback(2, _("Iterative refinement..."))
 
         max_iterations = 5
         convergence_threshold_mm = 0.1
-        outlier_threshold_mm = 20.0
+        outlier_threshold_mm = 50.0  # Generous threshold to pull in template initially
         prev_mean_error = float("inf")
 
         current_template = template_subset.copy()
         current_transform = m_fiducial.copy()
         best_transform = current_transform.copy()
 
+        from invesalius.data import transformations as tr
+
         for iteration in range(max_iterations):
-            # ICP: move template toward point cloud
-            m_icp = self._run_vtk_icp(
-                source_points=current_template,
-                target_points=point_cloud,
-            )
-
-            # Accumulate transform
-            current_transform = m_icp @ current_transform
-            current_template = self._apply_transform_to_points(
-                self.template_positions[subset_indices], current_transform
-            )
-
-            # Hungarian assignment on current positions
+            # 1. Hungarian assignment on current positions
             cost_matrix = cdist(point_cloud, current_template)
             if M <= len(current_template):
                 row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -500,29 +453,22 @@ class EEGMontage(metaclass=Singleton):
             prev_mean_error = mean_error
             best_transform = current_transform.copy()
 
-            # Filter outlier pairs for next ICP iteration
-            # Only use well-matched pairs as ICP targets for next round
+            # 2. Filter outlier pairs for Kabsch (rigid + scale transform)
             good_mask = pair_dists < outlier_threshold_mm
             if good_mask.sum() < 3:
-                break  # Not enough good pairs
+                break  # Not enough good pairs to compute transform
 
-            # For next ICP: use only the good matched template positions
+            # 3. Compute absolute transform from ORIGINAL template space to point cloud
             good_template_indices = col_ind[good_mask]
-            current_template = self._apply_transform_to_points(
-                self.template_positions[subset_indices[good_template_indices]],
-                current_transform,
+            src_points = self.template_positions[subset_indices[good_template_indices]]
+            dst_points = point_cloud[row_ind[good_mask]]
+
+            m_kabsch = tr.affine_matrix_from_points(
+                src_points.T, dst_points.T, shear=False, scale=True
             )
-            point_cloud_for_icp = point_cloud[row_ind[good_mask]]
 
-            # Re-run ICP with filtered pairs only
-            if iteration < max_iterations - 1:
-                m_icp_refined = self._run_vtk_icp(
-                    source_points=current_template,
-                    target_points=point_cloud_for_icp,
-                )
-                current_transform = m_icp_refined @ current_transform
-
-            # Restore full template subset for next assignment
+            # Update transform and template for next iteration
+            current_transform = m_kabsch
             current_template = self._apply_transform_to_points(
                 self.template_positions[subset_indices], current_transform
             )
