@@ -8801,9 +8801,7 @@ class EEGDigitizationDialog(wx.Dialog):
         self.results_list.DeleteAllItems()
 
         # Re-add from point_cloud
-        has_matches = (
-            hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels
-        )
+        has_matches = bool(self.eeg_montage.labeled_electrodes)
 
         eeg_data = []
 
@@ -8817,8 +8815,8 @@ class EEGDigitizationDialog(wx.Dialog):
             distance = "-"
             confidence = "-"
 
-            if has_matches and i < len(self.eeg_montage.matched_labels):
-                res = self.eeg_montage.matched_labels[i]
+            if has_matches and i < len(self.eeg_montage.labeled_electrodes):
+                res = self.eeg_montage.labeled_electrodes[i]
                 label = res.label
                 name = label
                 distance = f"{res.distance_mm:.2f}" if res.distance_mm is not None else "N/A"
@@ -8868,10 +8866,8 @@ class EEGDigitizationDialog(wx.Dialog):
         self.selected_item = evt.GetIndex()
         menu = wx.Menu()
 
-        if (
-            hasattr(self.eeg_montage, "matched_labels")
-            and self.eeg_montage.matched_labels
-            and self.selected_item < len(self.eeg_montage.matched_labels)
+        if self.eeg_montage.labeled_electrodes and self.selected_item < len(
+            self.eeg_montage.labeled_electrodes
         ):
             change_lbl_item = menu.Append(wx.ID_ANY, _("Change Label..."))
             self.Bind(wx.EVT_MENU, self.OnChangeLabel, change_lbl_item)
@@ -8905,14 +8901,14 @@ class EEGDigitizationDialog(wx.Dialog):
             self.interactor.Render()
 
     def OnChangeLabel(self, evt):
-        if not (hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels):
+        if not self.eeg_montage.labeled_electrodes:
             return
 
         idx = getattr(self, "selected_item", -1)
-        if idx < 0 or idx >= len(self.eeg_montage.matched_labels):
+        if idx < 0 or idx >= len(self.eeg_montage.labeled_electrodes):
             return
 
-        current_lbl = self.eeg_montage.matched_labels[idx]
+        current_elec = self.eeg_montage.labeled_electrodes[idx]
         available_labels = getattr(self.eeg_montage, "template_labels", [])
         if not available_labels:
             return
@@ -8923,12 +8919,13 @@ class EEGDigitizationDialog(wx.Dialog):
             _("Change Label"),
             available_labels,
         )
-        if current_lbl in available_labels:
-            dlg.SetSelection(available_labels.index(current_lbl))
+        if current_elec.label in available_labels:
+            dlg.SetSelection(available_labels.index(current_elec.label))
 
         if dlg.ShowModal() == wx.ID_OK:
             new_label = dlg.GetStringSelection()
-            self.eeg_montage.matched_labels[idx] = new_label
+            current_elec.label = new_label
+            current_elec.manually_corrected = True
             self._refresh_list()
         dlg.Destroy()
 
@@ -8937,24 +8934,21 @@ class EEGDigitizationDialog(wx.Dialog):
             idx = self.selected_item
             if idx < len(self.eeg_montage.point_cloud):
                 self.eeg_montage.point_cloud.pop(idx)
-                if (
-                    hasattr(self.eeg_montage, "matched_labels")
-                    and self.eeg_montage.matched_labels
-                    and idx < len(self.eeg_montage.matched_labels)
+                if self.eeg_montage.labeled_electrodes and idx < len(
+                    self.eeg_montage.labeled_electrodes
                 ):
-                    self.eeg_montage.matched_labels.pop(idx)
+                    self.eeg_montage.labeled_electrodes.pop(idx)
             self._refresh_list()
 
     def OnClearAll(self, evt):
         self.eeg_montage.point_cloud.clear()
-        if hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels:
-            self.eeg_montage.matched_labels.clear()
+        self.eeg_montage.labeled_electrodes.clear()
         self._refresh_list()
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
-            if hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels:
-                self.eeg_montage.matched_labels.clear()
+            if self.eeg_montage.labeled_electrodes:
+                self.eeg_montage.labeled_electrodes.clear()
 
             import numpy as np
 
@@ -9071,7 +9065,6 @@ class EEGDigitizationDialog(wx.Dialog):
             progress.Update(4, _("Done!"))
             progress.Destroy()
 
-            self.eeg_montage.matched_labels = results
             self.eeg_montage.SaveState()
             self._refresh_list()
 

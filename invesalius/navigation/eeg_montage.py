@@ -106,13 +106,13 @@ class EEGMontage(metaclass=Singleton):
             "template_name": self.template_name,
             "show_electrodes": self.show_electrodes,
             "point_cloud": [p.tolist() for p in self.point_cloud],
-            "matched_labels": [
+            "labeled_electrodes": [
                 {
-                    "label": res.label,
-                    "distance_mm": res.distance_mm,
-                    "confidence": res.confidence.value,
+                    "label": elec.label,
+                    "distance_mm": elec.distance_mm,
+                    "confidence": elec.confidence.value,
                 }
-                for res in getattr(self, "matched_labels", [])
+                for elec in self.labeled_electrodes
             ],
         }
         ses.Session().SetState("eeg_montage", state)
@@ -131,12 +131,22 @@ class EEGMontage(metaclass=Singleton):
         if self.template_name:
             self.load_template(self.template_name)
 
-        if "matched_labels" in state:
-            self.matched_labels = []
-            for m in state["matched_labels"]:
+        # Support both old key "matched_labels" and new key "labeled_electrodes"
+        elec_data = state.get("labeled_electrodes", state.get("matched_labels", []))
+        if elec_data:
+            self.labeled_electrodes = []
+            _zero = np.zeros(3)
+            for m in elec_data:
                 conf = ConfidenceLevel(m["confidence"])
-                res = MatchResult(label=m["label"], distance_mm=m["distance_mm"], confidence=conf)
-                self.matched_labels.append(res)
+                elec = LabeledElectrode(
+                    label=m["label"],
+                    position_inv=_zero,
+                    position_world=_zero,
+                    template_position=_zero,
+                    distance_mm=m["distance_mm"],
+                    confidence=conf,
+                )
+                self.labeled_electrodes.append(elec)
 
     # --- Template Loading (via MNE) ---
 
@@ -403,15 +413,15 @@ class EEGMontage(metaclass=Singleton):
         template_aligned = self.apply_transform_to_template(m_fiducial)
 
         # Step 3: ICP refinement
+        # Source = template (to be moved), Target = point cloud (fixed ground truth)
         if progress_callback:
             progress_callback(2, _("ICP refinement..."))
-        m_icp_inv = self._run_vtk_icp(
-            source_points=self.get_point_cloud_array(),
-            target_points=template_aligned,
+        m_icp = self._run_vtk_icp(
+            source_points=template_aligned,
+            target_points=self.get_point_cloud_array(),
         )
-        m_icp = np.linalg.inv(m_icp_inv)
 
-        # Total transform
+        # Total transform: first fiducial alignment, then ICP refinement
         self.icp_transform = m_icp @ m_fiducial
         template_final = self.apply_transform_to_template(self.icp_transform)
 
