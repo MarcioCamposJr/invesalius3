@@ -8596,8 +8596,15 @@ class EEGDigitizationDialog(wx.Dialog):
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
         bottom_sizer.AddStretchSpacer(1)
 
-        btn_export = wx.Button(self, -1, _("Export BIDS"))
-        btn_export.Bind(wx.EVT_BUTTON, self.OnExportBIDS)
+        lbl_export_format = wx.StaticText(self, -1, _("Format:"))
+        bottom_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS"])
+        self.choice_export_format.SetSelection(0)
+        bottom_sizer.Add(self.choice_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        btn_export = wx.Button(self, -1, _("Export"))
+        btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
         bottom_sizer.Add(btn_export, 0, wx.ALL, 5)
 
         btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"))
@@ -8959,6 +8966,11 @@ class EEGDigitizationDialog(wx.Dialog):
 
         except Exception as e:
             wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
+
+    def OnExport(self, evt):
+        fmt = self.choice_export_format.GetStringSelection()
+        if fmt == "BIDS":
+            self.OnExportBIDS(evt)
 
     def OnExportBIDS(self, evt):
         dlg = wx.DirDialog(
