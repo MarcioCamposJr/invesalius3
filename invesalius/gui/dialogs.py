@@ -8860,6 +8860,20 @@ class EEGDigitizationDialog(wx.Dialog):
         self.selected_item = evt.GetIndex()
         menu = wx.Menu()
 
+        if (
+            hasattr(self.eeg_montage, "matched_labels")
+            and self.eeg_montage.matched_labels
+            and self.selected_item < len(self.eeg_montage.matched_labels)
+        ):
+            change_lbl_item = menu.Append(wx.ID_ANY, _("Change Label..."))
+            self.Bind(wx.EVT_MENU, self.OnChangeLabel, change_lbl_item)
+            menu.AppendSeparator()
+
+        item = menu.Append(wx.ID_ANY, _("Delete Point"))
+        self.Bind(wx.EVT_MENU, self.OnDeletePoint, item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
     def OnItemSelected(self, evt):
         idx = evt.GetIndex()
         if not hasattr(self, "electrode_data") or idx >= len(self.electrode_data):
@@ -8881,20 +8895,6 @@ class EEGDigitizationDialog(wx.Dialog):
 
         if hasattr(self, "interactor"):
             self.interactor.Render()
-
-        if (
-            hasattr(self.eeg_montage, "matched_labels")
-            and self.eeg_montage.matched_labels
-            and self.selected_item < len(self.eeg_montage.matched_labels)
-        ):
-            change_lbl_item = menu.Append(wx.ID_ANY, _("Change Label..."))
-            self.Bind(wx.EVT_MENU, self.OnChangeLabel, change_lbl_item)
-            menu.AppendSeparator()
-
-        item = menu.Append(wx.ID_ANY, _("Delete Point"))
-        self.Bind(wx.EVT_MENU, self.OnDeletePoint, item)
-        self.PopupMenu(menu)
-        menu.Destroy()
 
     def OnChangeLabel(self, evt):
         if not (hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels):
