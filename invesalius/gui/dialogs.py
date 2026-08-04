@@ -8484,30 +8484,31 @@ class GridConfigDialog(wx.Dialog):
 
 class EEGDigitizationDialog(wx.Dialog):
     """
-    Wizard dialog for EEG Electrode Digitization.
-    Guides the user through:
-    Step 1: Select Template
-    Step 2: Register Fiducials
-    Step 3: Point Cloud Capture
-    Step 4: Results and Manual Overrides
+    Single-window dialog for EEG Electrode Digitization.
+    Embeds a VTK viewer and table to collect points and match them.
     """
 
     def __init__(self, parent, nav_hub):
         super().__init__(
             parent,
             -1,
-            _("EEG Electrode Digitization Wizard"),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-            size=(800, 600),
+            _("EEG Electrode Digitization"),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
+            size=(1000, 700),
         )
         self.nav_hub = nav_hub
-        self.eeg_montage = nav_hub.eeg_montage  # We'll need to instantiate this in NavigationHub
+        self.eeg_montage = nav_hub.eeg_montage
 
         self.current_coord = None
+        self.electrode_actors = {}
+
+        self.ren = None
+        self.interactor = None
+
         Publisher.subscribe(self.OnUpdateCoord, "Set cross focal point")
 
-        self.current_step = 1
         self._init_ui()
+        self._init_vtk()
         self.CenterOnScreen()
 
         self.Bind(wx.EVT_CLOSE, self.OnCloseEvent)
@@ -8526,190 +8527,228 @@ class EEGDigitizationDialog(wx.Dialog):
         evt.Skip()
 
     def _init_ui(self):
-        self.main_sizer = wx.BoxSizer(wx.VERTICAL)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Step titles
-        self.title_text = wx.StaticText(self, -1, _("Step 1: Select Template"))
-        font = self.title_text.GetFont()
+        # Top Bar: Template Selection
+        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_template = wx.StaticText(self, -1, _("EEG Template:"))
+        font = lbl_template.GetFont()
         font.SetWeight(wx.FONTWEIGHT_BOLD)
-        font.SetPointSize(12)
-        self.title_text.SetFont(font)
-        self.main_sizer.Add(self.title_text, 0, wx.ALL | wx.EXPAND, 10)
-
-        # Content panel
-        self.content_panel = wx.Panel(self)
-        self.content_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.content_panel.SetSizer(self.content_sizer)
-        self.main_sizer.Add(self.content_panel, 1, wx.ALL | wx.EXPAND, 10)
-
-        # Navigation buttons
-        self.btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_prev = wx.Button(self, -1, _("< Previous"))
-        self.btn_next = wx.Button(self, -1, _("Next >"))
-        self.btn_finish = wx.Button(self, -1, _("Finish"))
-        self.btn_cancel = wx.Button(self, wx.ID_CANCEL, _("Cancel"))
-
-        self.btn_prev.Bind(wx.EVT_BUTTON, self.OnPrev)
-        self.btn_next.Bind(wx.EVT_BUTTON, self.OnNext)
-        self.btn_finish.Bind(wx.EVT_BUTTON, self.OnFinish)
-        self.btn_cancel.Bind(wx.EVT_BUTTON, self.OnCancel)
-
-        self.btn_sizer.AddStretchSpacer(1)
-        self.btn_sizer.Add(self.btn_prev, 0, wx.ALL, 5)
-        self.btn_sizer.Add(self.btn_next, 0, wx.ALL, 5)
-        self.btn_sizer.Add(self.btn_finish, 0, wx.ALL, 5)
-        self.btn_sizer.Add(self.btn_cancel, 0, wx.ALL, 5)
-
-        self.main_sizer.Add(self.btn_sizer, 0, wx.EXPAND | wx.ALL, 10)
-        self.SetSizer(self.main_sizer)
-
-        self.UpdateStep()
-
-    def UpdateStep(self):
-        # Clear current content
-        self.content_sizer.Clear(True)
-
-        self.btn_prev.Enable(self.current_step > 1)
-        self.btn_next.Show(self.current_step < 4)
-        self.btn_finish.Show(self.current_step == 4)
-
-        if self.current_step == 1:
-            self.title_text.SetLabel(_("Step 1: Select Template"))
-            self._build_step_1()
-        elif self.current_step == 2:
-            self.title_text.SetLabel(_("Step 2: Register Fiducials"))
-            self._build_step_2()
-        elif self.current_step == 3:
-            self.title_text.SetLabel(_("Step 3: Point Cloud Capture"))
-            self._build_step_3()
-        elif self.current_step == 4:
-            self.title_text.SetLabel(_("Step 4: Results and Overrides"))
-            self._build_step_4()
-
-        self.content_panel.Layout()
-        self.btn_sizer.Layout()
-        self.main_sizer.Layout()
-
-    def _build_step_1(self):
-        lbl = wx.StaticText(self.content_panel, -1, _("Choose an EEG template:"))
-        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        lbl_template.SetFont(font)
 
         self.template_choice = wx.Choice(
-            self.content_panel, -1, choices=self.eeg_montage.get_available_templates()
+            self, -1, choices=self.eeg_montage.get_available_templates()
         )
         if self.eeg_montage.template_name:
             self.template_choice.SetStringSelection(self.eeg_montage.template_name)
         elif self.template_choice.GetCount() > 0:
             self.template_choice.SetSelection(0)
 
-        self.content_sizer.Add(self.template_choice, 0, wx.ALL | wx.EXPAND, 5)
+        self.template_choice.Bind(wx.EVT_CHOICE, self.OnTemplateChanged)
 
-    def _build_step_2(self):
-        lbl = wx.StaticText(
-            self.content_panel, -1, _("Register the following fiducials using the spatial tracker:")
-        )
-        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        top_sizer.Add(lbl_template, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        top_sizer.Add(self.template_choice, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        self.fiducials_captured = {"nasion": False, "lpa": False, "rpa": False}
+        main_sizer.Add(top_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
-        self.btn_nasion = wx.Button(self.content_panel, -1, _("Capture Nasion"))
-        self.btn_lpa = wx.Button(self.content_panel, -1, _("Capture LPA"))
-        self.btn_rpa = wx.Button(self.content_panel, -1, _("Capture RPA"))
+        # Middle Split: VTK Left, Table Right
+        split_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.btn_nasion.Bind(
-            wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("nasion", self.btn_nasion)
-        )
-        self.btn_lpa.Bind(wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("lpa", self.btn_lpa))
-        self.btn_rpa.Bind(wx.EVT_BUTTON, lambda evt: self.OnCaptureFiducial("rpa", self.btn_rpa))
+        # Left Panel (VTK)
+        vtk_panel = wx.Panel(self)
+        vtk_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.interactor = wxVTKRenderWindowInteractor(vtk_panel, -1, size=(600, 500))
+        vtk_sizer.Add(self.interactor, 1, wx.EXPAND | wx.ALL, 0)
+        vtk_panel.SetSizer(vtk_sizer)
 
-        self.content_sizer.Add(self.btn_nasion, 0, wx.ALL, 5)
-        self.content_sizer.Add(self.btn_lpa, 0, wx.ALL, 5)
-        self.content_sizer.Add(self.btn_rpa, 0, wx.ALL, 5)
+        # Right Panel (Table and Controls)
+        right_panel = wx.Panel(self)
+        right_sizer = wx.BoxSizer(wx.VERTICAL)
 
-    def OnCaptureFiducial(self, name, btn):
-        if self.current_coord is not None:
-            self.eeg_montage.add_fiducial_target(name, self.current_coord)
-            self.fiducials_captured[name] = True
-            btn.SetBackgroundColour(wx.Colour(144, 238, 144))  # Light green
-            btn.SetLabel(btn.GetLabel() + " (Captured)")
-            btn.Disable()
+        btn_capture = wx.Button(right_panel, -1, _("Capture Point (Probe)"))
+        btn_capture.Bind(wx.EVT_BUTTON, self.OnCaptureElectrode)
+        right_sizer.Add(btn_capture, 0, wx.EXPAND | wx.ALL, 5)
 
-            # Check if all fiducials are captured to perform alignment
-            if all(self.fiducials_captured.values()):
-                self.eeg_montage.align_fiducials()
-                wx.MessageBox(
-                    _("Fiducials aligned successfully!"), _("Success"), wx.ICON_INFORMATION
-                )
-        else:
-            wx.MessageBox(
-                _("No spatial tracker coordinate received yet."), _("Error"), wx.ICON_ERROR
-            )
+        self.results_list = wx.ListCtrl(right_panel, -1, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.results_list.InsertColumn(0, _("ID"), width=50)
+        self.results_list.InsertColumn(1, _("Matched Name"), width=100)
+        self.results_list.InsertColumn(2, _("Distance (mm)"), width=100)
+        self.results_list.InsertColumn(3, _("Confidence"), width=100)
+        right_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 5)
 
-    def _build_step_3(self):
-        lbl = wx.StaticText(self.content_panel, -1, _("Capture electrode points on the head."))
-        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
+        btn_process = wx.Button(right_panel, -1, _("Process and Match Electrodes"))
+        btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
+        right_sizer.Add(btn_process, 0, wx.EXPAND | wx.ALL, 5)
 
-        self.btn_capture_elec = wx.Button(
-            self.content_panel, -1, _("Capture Electrode (or use pedal)")
-        )
-        self.btn_capture_elec.Bind(wx.EVT_BUTTON, self.OnCaptureElectrode)
-        self.content_sizer.Add(self.btn_capture_elec, 0, wx.ALL, 5)
+        right_panel.SetSizer(right_sizer)
 
-        self.lbl_elec_count = wx.StaticText(self.content_panel, -1, _("Electrodes captured: 0"))
-        self.content_sizer.Add(self.lbl_elec_count, 0, wx.ALL, 5)
+        split_sizer.Add(vtk_panel, 2, wx.EXPAND | wx.ALL, 5)
+        split_sizer.Add(right_panel, 1, wx.EXPAND | wx.ALL, 5)
+
+        main_sizer.Add(split_sizer, 1, wx.EXPAND | wx.ALL, 5)
+
+        # Bottom Bar: Export and Close
+        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        bottom_sizer.AddStretchSpacer(1)
+
+        btn_export = wx.Button(self, -1, _("Export BIDS"))
+        btn_export.Bind(wx.EVT_BUTTON, self.OnExportBIDS)
+        bottom_sizer.Add(btn_export, 0, wx.ALL, 5)
+
+        btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"))
+        bottom_sizer.Add(btn_close, 0, wx.ALL, 5)
+
+        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        self.SetSizer(main_sizer)
+
+    def OnTemplateChanged(self, evt):
+        template = self.template_choice.GetStringSelection()
+        if template:
+            self.eeg_montage.load_template(template)
+
+    def _init_vtk(self):
+        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
+
+        import invesalius.project as prj
+
+        self.interactor.Enable(1)
+        self.ren = vtkRenderer()
+        self.ren.SetBackground(0.1, 0.1, 0.2)
+        self.interactor.GetRenderWindow().AddRenderer(self.ren)
+
+        # Load head surface from project
+        proj = prj.Project()
+        if proj.surface_dict:
+            # Get the last surface or a combined surface
+            last_idx = max(proj.surface_dict.keys())
+            surface = proj.surface_dict[last_idx]
+            if surface and hasattr(surface, "polydata"):
+                mapper = vtkPolyDataMapper()
+                mapper.SetInputData(surface.polydata)
+                actor = vtkActor()
+                actor.SetMapper(mapper)
+                actor.GetProperty().SetOpacity(0.8)
+                actor.GetProperty().SetColor(0.9, 0.8, 0.7)
+                self.ren.AddActor(actor)
+
+        self.ren.ResetCamera()
+
+    def _create_torus_actor(self, position, color):
+        from vtkmodules.vtkCommonComputationalGeometry import vtkParametricTorus
+        from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
+        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
+
+        torus = vtkParametricTorus()
+        torus.SetRingRadius(4.0)
+        torus.SetCrossSectionRadius(1.5)
+
+        source = vtkParametricFunctionSource()
+        source.SetParametricFunction(torus)
+        source.Update()
+
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputConnection(source.GetOutputPort())
+
+        actor = vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(color)
+        actor.SetPosition(position)
+
+        return actor
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
             count = len(self.eeg_montage.electrodes_target)
             name = f"E{count + 1}"
             self.eeg_montage.add_electrode_target(name, self.current_coord)
-            self.lbl_elec_count.SetLabel(_(f"Electrodes captured: {count + 1}"))
+
+            # Add to table
+            idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
+            self.results_list.SetItem(idx, 1, "-")
+            self.results_list.SetItem(idx, 2, "-")
+            self.results_list.SetItem(idx, 3, "-")
+
+            # Add VTK Torus
+            actor = self._create_torus_actor(self.current_coord, (0.5, 0.5, 0.5))  # Default gray
+            self.ren.AddActor(actor)
+            self.electrode_actors[name] = actor
+
+            self.interactor.Render()
         else:
             wx.MessageBox(
-                _("No spatial tracker coordinate received yet."), _("Error"), wx.ICON_ERROR
+                _("No spatial tracker coordinate received yet. Make sure navigation is active."),
+                _("Error"),
+                wx.ICON_ERROR,
             )
 
-    def _build_step_4(self):
-        lbl = wx.StaticText(self.content_panel, -1, _("Review mapping results and export."))
-        self.content_sizer.Add(lbl, 0, wx.ALL, 5)
-
-        self.btn_process = wx.Button(self.content_panel, -1, _("Process and Match Electrodes"))
-        self.btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
-        self.content_sizer.Add(self.btn_process, 0, wx.ALL, 5)
-
-        self.results_list = wx.ListCtrl(
-            self.content_panel, -1, style=wx.LC_REPORT | wx.BORDER_SUNKEN
-        )
-        self.results_list.InsertColumn(0, _("Matched Name"), width=100)
-        self.results_list.InsertColumn(1, _("Distance (mm)"), width=100)
-        self.results_list.InsertColumn(2, _("Confidence"), width=100)
-        self.content_sizer.Add(self.results_list, 1, wx.ALL | wx.EXPAND, 5)
-
-        self.btn_export = wx.Button(self.content_panel, -1, _("Export BIDS"))
-        self.btn_export.Bind(wx.EVT_BUTTON, self.OnExportBIDS)
-        self.content_sizer.Add(self.btn_export, 0, wx.ALL, 5)
-
     def OnProcessElectrodes(self, evt):
+        # 1. Fetch image fiducials and register
+        fiducials = None
+        if hasattr(self.nav_hub.image, "fiducials"):
+            fiducials = self.nav_hub.image.fiducials
+
+        import numpy as np
+
+        if fiducials is None or np.isnan(fiducials[0:3]).any():
+            wx.MessageBox(
+                _(
+                    "Please register image fiducials in Navigation (Left Ear, Right Ear, Nasion) first!"
+                ),
+                _("Error"),
+                wx.ICON_ERROR,
+            )
+            return
+
         try:
+            # Map navigation fiducials to MNE expected:
+            # InVesalius: 0=LE, 1=RE, 2=Nasion
+            self.eeg_montage.add_fiducial_target("lpa", fiducials[0])
+            self.eeg_montage.add_fiducial_target("rpa", fiducials[1])
+            self.eeg_montage.add_fiducial_target("nasion", fiducials[2])
+
+            # Make sure template is loaded
+            template = self.template_choice.GetStringSelection()
+            if template:
+                self.eeg_montage.load_template(template)
+
+            self.eeg_montage.align_fiducials()
             self.eeg_montage.filter_outliers_and_duplicates()
             self.eeg_montage.perform_icp()
             results = self.eeg_montage.label_electrodes()
 
+            # Update Table and Colors
             self.results_list.DeleteAllItems()
             for res in results:
+                # Refresh table
                 idx = self.results_list.InsertItem(self.results_list.GetItemCount(), res["name"])
+                self.results_list.SetItem(idx, 1, res["name"])
+
                 dist_str = f"{res['distance']:.2f}" if res["distance"] is not None else "N/A"
-                self.results_list.SetItem(idx, 1, dist_str)
-                self.results_list.SetItem(idx, 2, res["confidence"])
+                self.results_list.SetItem(idx, 2, dist_str)
+                self.results_list.SetItem(idx, 3, res["confidence"])
 
+                # Colors
+                color = (0.5, 0.5, 0.5)
+                text_color = wx.Colour(100, 100, 100)
                 if res["confidence"] == "High":
-                    self.results_list.SetItemTextColour(idx, wx.Colour(0, 150, 0))
+                    color = (0.0, 1.0, 0.0)  # Green
+                    text_color = wx.Colour(0, 150, 0)
                 elif res["confidence"] == "Medium":
-                    self.results_list.SetItemTextColour(idx, wx.Colour(204, 204, 0))
-                else:
-                    self.results_list.SetItemTextColour(idx, wx.Colour(200, 0, 0))
+                    color = (1.0, 1.0, 0.0)  # Yellow
+                    text_color = wx.Colour(204, 204, 0)
+                elif res["confidence"] == "Low":
+                    color = (1.0, 0.0, 0.0)  # Red
+                    text_color = wx.Colour(200, 0, 0)
 
+                self.results_list.SetItemTextColour(idx, text_color)
+
+                # Update Actor color
+                if res["name"] in self.electrode_actors:
+                    self.electrode_actors[res["name"]].GetProperty().SetColor(color)
+
+            self.interactor.Render()
             wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
+
         except Exception as e:
             wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
 
@@ -8725,27 +8764,3 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.export_to_bids(path)
             wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
         dlg.Destroy()
-
-    def OnPrev(self, evt):
-        self.current_step -= 1
-        self.UpdateStep()
-
-    def OnNext(self, evt):
-        if self.current_step == 1:
-            template = self.template_choice.GetStringSelection()
-            if template:
-                self.eeg_montage.load_template(template)
-            else:
-                wx.MessageBox(_("Please select a template first."), _("Error"), wx.ICON_ERROR)
-                return
-
-        self.current_step += 1
-        self.UpdateStep()
-
-    def OnFinish(self, evt):
-        self.CloseDialog()
-        self.EndModal(wx.ID_OK)
-
-    def OnCancel(self, evt):
-        self.CloseDialog()
-        self.EndModal(wx.ID_CANCEL)
