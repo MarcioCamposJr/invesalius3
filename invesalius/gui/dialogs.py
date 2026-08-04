@@ -8594,6 +8594,12 @@ class EEGDigitizationDialog(wx.Dialog):
 
         # Bottom Bar: Export and Close
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.cb_show_electrodes = wx.CheckBox(self, -1, _("Show Electrodes"))
+        self.cb_show_electrodes.SetValue(True)
+        self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
+        bottom_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
         bottom_sizer.AddStretchSpacer(1)
 
         lbl_export_format = wx.StaticText(self, -1, _("Format:"))
@@ -8980,6 +8986,10 @@ class EEGDigitizationDialog(wx.Dialog):
 
         except Exception as e:
             wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
+
+    def OnToggleShowElectrodes(self, evt):
+        show = self.cb_show_electrodes.GetValue()
+        Publisher.sendMessage("Toggle EEG electrodes visibility", show=show)
 
     def OnExport(self, evt):
         fmt = self.choice_export_format.GetStringSelection()
