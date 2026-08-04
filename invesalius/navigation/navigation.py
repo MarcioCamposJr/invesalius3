@@ -190,7 +190,7 @@ class UpdateNavigationScene(threading.Thread):
                     position=[coord[0], -coord[1], coord[2]],
                 )
 
-                if coil_visible:
+                if coil_visible and main_coil is not None:
                     Publisher.sendMessage("Update coil poses", m_imgs=m_imgs, coords=coords)
                     Publisher.sendMessage(
                         "Update coil pose",
@@ -269,7 +269,7 @@ class UpdateNavigationScene(threading.Thread):
                             Publisher.sendMessage,
                             "Update tract seed based efield",
                             coord_tracts_queue=self.navigation.coord_tracts_queue,
-                            fallback_m_img=m_imgs[main_coil],
+                            fallback_m_img=m_imgs.get(main_coil, m_imgs.get("probe")),
                             current_revision=self.navigation.e_field_revision,
                         )
                     bundle, affine_vtk, coord_offset, coord_offset_w = (

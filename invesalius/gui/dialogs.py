@@ -8867,7 +8867,7 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.add_point(self.current_coord)
             coord = self.eeg_montage.point_cloud[-1]
 
-            _, final_coord, target_z = self._create_torus_actor(coord, (0.5, 0.5, 0.5))
+            actor, final_coord, target_z = self._create_torus_actor(coord, (0.5, 0.5, 0.5))
 
             self._refresh_list()
             self._focus_camera(final_coord, normal=target_z)
