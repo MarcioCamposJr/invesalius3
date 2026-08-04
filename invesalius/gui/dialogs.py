@@ -8628,7 +8628,7 @@ class EEGDigitizationDialog(wx.Dialog):
                 actor = vtkActor()
                 actor.SetMapper(mapper)
                 actor.GetProperty().SetOpacity(0.8)
-                actor.GetProperty().SetColor(0.9, 0.8, 0.7)
+                actor.GetProperty().SetColor(0.7, 0.7, 0.7)
                 self.ren.AddActor(actor)
 
         self.ren.ResetCamera()
