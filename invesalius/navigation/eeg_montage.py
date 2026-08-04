@@ -393,7 +393,7 @@ class EEGMontage(metaclass=Singleton):
 
             pos_inv = point_cloud[pt_idx]
             # Convert to world (Scanner RAS)
-            pos_world, _ = imagedata_utils.convert_invesalius_to_world(
+            pos_world, _ori = imagedata_utils.convert_invesalius_to_world(
                 position=list(pos_inv), orientation=[0, 0, 0]
             )
             pos_world = np.array(pos_world) if pos_world[0] is not None else pos_inv
@@ -525,7 +525,7 @@ class EEGMontage(metaclass=Singleton):
         # Add fiducials to coordsystem
         for fid_name, fid_pos in self.fiducials_inv.items():
             if fid_pos is not None:
-                pos_world, _ = imagedata_utils.convert_invesalius_to_world(
+                pos_world, _ori = imagedata_utils.convert_invesalius_to_world(
                     position=list(fid_pos), orientation=[0, 0, 0]
                 )
                 if pos_world[0] is not None:
