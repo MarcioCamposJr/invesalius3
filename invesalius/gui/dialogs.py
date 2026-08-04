@@ -8658,9 +8658,9 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
-            count = len(self.eeg_montage.electrodes_target)
+            count = len(self.eeg_montage.point_cloud)
             name = f"E{count + 1}"
-            self.eeg_montage.add_electrode_target(name, self.current_coord)
+            self.eeg_montage.add_point(self.current_coord)
 
             # Add to table
             idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
@@ -8702,49 +8702,49 @@ class EEGDigitizationDialog(wx.Dialog):
         try:
             # Map navigation fiducials to MNE expected:
             # InVesalius: 0=LE, 1=RE, 2=Nasion
-            self.eeg_montage.add_fiducial_target("lpa", fiducials[0])
-            self.eeg_montage.add_fiducial_target("rpa", fiducials[1])
-            self.eeg_montage.add_fiducial_target("nasion", fiducials[2])
+            self.eeg_montage.set_fiducial("lpa", fiducials[0])
+            self.eeg_montage.set_fiducial("rpa", fiducials[1])
+            self.eeg_montage.set_fiducial("nasion", fiducials[2])
 
             # Make sure template is loaded
             template = self.template_choice.GetStringSelection()
             if template:
                 self.eeg_montage.load_template(template)
 
-            self.eeg_montage.align_fiducials()
-            self.eeg_montage.filter_outliers_and_duplicates()
-            self.eeg_montage.perform_icp()
-            results = self.eeg_montage.label_electrodes()
+            self.eeg_montage.compute_fiducial_alignment()
+            self.eeg_montage.filter_outliers()
+            self.eeg_montage.filter_duplicates()
+            _, results = self.eeg_montage.run_icp_matching()
 
             # Update Table and Colors
             self.results_list.DeleteAllItems()
             for res in results:
                 # Refresh table
-                idx = self.results_list.InsertItem(self.results_list.GetItemCount(), res["name"])
-                self.results_list.SetItem(idx, 1, res["name"])
+                idx = self.results_list.InsertItem(self.results_list.GetItemCount(), res.label)
+                self.results_list.SetItem(idx, 1, res.label)
 
-                dist_str = f"{res['distance']:.2f}" if res["distance"] is not None else "N/A"
+                dist_str = f"{res.distance_mm:.2f}" if res.distance_mm is not None else "N/A"
                 self.results_list.SetItem(idx, 2, dist_str)
-                self.results_list.SetItem(idx, 3, res["confidence"])
+                self.results_list.SetItem(idx, 3, res.confidence.value.capitalize())
 
                 # Colors
                 color = (0.5, 0.5, 0.5)
                 text_color = wx.Colour(100, 100, 100)
-                if res["confidence"] == "High":
+                if res.confidence.value == "high":
                     color = (0.0, 1.0, 0.0)  # Green
                     text_color = wx.Colour(0, 150, 0)
-                elif res["confidence"] == "Medium":
+                elif res.confidence.value == "medium":
                     color = (1.0, 1.0, 0.0)  # Yellow
                     text_color = wx.Colour(204, 204, 0)
-                elif res["confidence"] == "Low":
+                elif res.confidence.value == "low":
                     color = (1.0, 0.0, 0.0)  # Red
                     text_color = wx.Colour(200, 0, 0)
 
                 self.results_list.SetItemTextColour(idx, text_color)
 
                 # Update Actor color
-                if res["name"] in self.electrode_actors:
-                    self.electrode_actors[res["name"]].GetProperty().SetColor(color)
+                if res.label in self.electrode_actors:
+                    self.electrode_actors[res.label].GetProperty().SetColor(color)
 
             self.interactor.Render()
             wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
@@ -8753,14 +8753,13 @@ class EEGDigitizationDialog(wx.Dialog):
             wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
 
     def OnExportBIDS(self, evt):
-        dlg = wx.FileDialog(
+        dlg = wx.DirDialog(
             self,
-            _("Save BIDS TSV"),
-            wildcard="TSV files (*.tsv)|*.tsv",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+            _("Select BIDS Export Directory"),
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
         )
         if dlg.ShowModal() == wx.ID_OK:
             path = dlg.GetPath()
-            self.eeg_montage.export_to_bids(path)
+            self.eeg_montage.export_bids(path)
             wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
         dlg.Destroy()
