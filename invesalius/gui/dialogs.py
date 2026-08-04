@@ -8667,7 +8667,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
                     actor = vtkActor()
                     actor.SetMapper(mapper)
-                    actor.GetProperty().SetOpacity(0.8)
+                    actor.GetProperty().SetOpacity(0.95)
                     actor.GetProperty().SetColor(*surface.colour[:3])
                     mapper.ScalarVisibilityOff()
                     self.ren.AddActor(actor)
