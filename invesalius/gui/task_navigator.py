@@ -1728,7 +1728,7 @@ class StimulatorPage(wx.Panel):
         wx.Panel.__init__(self, parent)
         self.navigation = nav_hub.navigation
 
-        border = wx.FlexGridSizer(1, 2, 1)
+        border = wx.FlexGridSizer(2, 2, 5)
         self.coil_registrations = []
 
         lbl = wx.StaticText(
@@ -1746,6 +1746,9 @@ class StimulatorPage(wx.Panel):
         btn_edit.SetToolTip("Open preferences menu")
         btn_edit.Bind(wx.EVT_BUTTON, self.OnEditPreferences)
 
+        self.cb_eeg_only = wx.CheckBox(self, -1, _("EEG/Probe only (No coil)"))
+        self.cb_eeg_only.Bind(wx.EVT_CHECKBOX, self.OnEEGOnly)
+
         back_button = wx.Button(self, label="Back")
         back_button.Bind(wx.EVT_BUTTON, self.OnBack)
 
@@ -1760,6 +1763,8 @@ class StimulatorPage(wx.Panel):
             [
                 (lbl, 1, wx.EXPAND),
                 (btn_edit, 1, wx.EXPAND),
+                (self.cb_eeg_only, 1, wx.EXPAND),
+                (wx.StaticText(self, -1, ""), 1, wx.EXPAND),
             ]
         )
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -1793,6 +1798,12 @@ class StimulatorPage(wx.Panel):
         Publisher.sendMessage("Enable start navigation button", enabled=False)
 
     def CoilSelectionDone(self, done):
+        if hasattr(self, "cb_eeg_only") and self.cb_eeg_only.GetValue():
+            self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
+            self.next_button.Enable(True)
+            self.lbl.Show()
+            return
+
         if done:
             self.lbl.SetLabel(
                 f"Ready for navigation with {self.navigation.n_coils} coil{'' if self.navigation.n_coils == 1 else 's'}!"
@@ -1802,6 +1813,14 @@ class StimulatorPage(wx.Panel):
 
         self.next_button.Enable(done)
         self.lbl.Show()
+
+    def OnEEGOnly(self, evt):
+        is_eeg_only = self.cb_eeg_only.GetValue()
+        if is_eeg_only:
+            self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
+            self.next_button.Enable(True)
+        else:
+            self.CoilSelectionDone(self.navigation.CoilSelectionDone())
 
     def OnEditPreferences(self, evt):
         Publisher.sendMessage("Open preferences menu", page=3)

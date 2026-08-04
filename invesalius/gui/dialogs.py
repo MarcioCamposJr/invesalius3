@@ -8777,6 +8777,8 @@ class EEGDigitizationDialog(wx.Dialog):
             hasattr(self.eeg_montage, "matched_labels") and self.eeg_montage.matched_labels
         )
 
+        eeg_data = []
+
         for i, coord in enumerate(self.eeg_montage.point_cloud):
             name = f"E{i + 1}"
 
@@ -8808,6 +8810,15 @@ class EEGDigitizationDialog(wx.Dialog):
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
+            eeg_data.append(
+                {
+                    "name": name,
+                    "position": final_coord,
+                    "normal": target_z.tolist() if hasattr(target_z, "tolist") else list(target_z),
+                    "color": color,
+                }
+            )
+
             idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
             self.results_list.SetItem(idx, 1, label)
             self.results_list.SetItem(idx, 2, distance)
@@ -8818,6 +8829,8 @@ class EEGDigitizationDialog(wx.Dialog):
 
         if hasattr(self, "interactor"):
             self.interactor.Render()
+
+        Publisher.sendMessage("Update EEG electrodes", electrodes_data=eeg_data)
 
     def OnRightClickItem(self, evt):
         self.selected_item = evt.GetIndex()
