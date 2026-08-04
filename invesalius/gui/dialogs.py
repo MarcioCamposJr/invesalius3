@@ -8649,7 +8649,8 @@ class EEGDigitizationDialog(wx.Dialog):
                     actor = vtkActor()
                     actor.SetMapper(mapper)
                     actor.GetProperty().SetOpacity(0.8)
-                    actor.GetProperty().SetColor(0.6, 0.6, 0.6)
+                    actor.GetProperty().SetColor(*surface.colour[:3])
+                    mapper.ScalarVisibilityOff()
                     self.ren.AddActor(actor)
 
         self.ren.ResetCamera()
@@ -8709,36 +8710,57 @@ class EEGDigitizationDialog(wx.Dialog):
 
             actor.SetUserTransform(transform)
             final_pos = closest_point
+            final_norm = target_z
         else:
             actor.SetPosition(position)
             final_pos = position
+            final_norm = np.array([0, 0, 1])
 
-        return actor, final_pos
+        return actor, final_pos, final_norm
 
-    def _focus_camera(self, position):
+    def _focus_camera(self, position, normal=None):
         import numpy as np
 
         cam = self.ren.GetActiveCamera()
 
-        center = np.array(cam.GetFocalPoint())
-        old_pos = np.array(cam.GetPosition())
         target = np.array(position)
+        old_pos = np.array(cam.GetPosition())
+        old_center = np.array(cam.GetFocalPoint())
 
-        distance = np.linalg.norm(old_pos - center)
-        direction = target - center
-        dir_norm = np.linalg.norm(direction)
+        distance = np.linalg.norm(old_pos - old_center)
+        if distance < 50:
+            distance = 250.0
 
-        if dir_norm > 0:
-            direction = direction / dir_norm
-            new_pos = center + direction * distance
-            cam.SetPosition(new_pos[0], new_pos[1], new_pos[2])
+        if normal is not None:
+            direction = np.array(normal)
+            if np.linalg.norm(direction) > 1e-6:
+                direction = direction / np.linalg.norm(direction)
+            else:
+                direction = np.array([0, 0, 1])
+        else:
+            direction = target - old_center
+            if np.linalg.norm(direction) > 1e-6:
+                direction = direction / np.linalg.norm(direction)
+            else:
+                direction = np.array([0, 0, 1])
+
+        new_pos = target + direction * distance
+
+        cam.SetFocalPoint(*target)
+        cam.SetPosition(new_pos[0], new_pos[1], new_pos[2])
+
+        if abs(direction[2]) > 0.99:
+            cam.SetViewUp(0, 1, 0)
+        else:
             cam.SetViewUp(0, 0, 1)
-            self.ren.ResetCameraClippingRange()
+
+        self.ren.ResetCameraClippingRange()
+        self.interactor.Render()
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
             # Add VTK Torus & project
-            actor, final_coord = self._create_torus_actor(
+            actor, final_coord, target_z = self._create_torus_actor(
                 self.current_coord, (0.5, 0.5, 0.5)
             )  # Default gray
 
@@ -8755,7 +8777,7 @@ class EEGDigitizationDialog(wx.Dialog):
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
-            self._focus_camera(self.current_coord)
+            self._focus_camera(final_coord, normal=target_z)
             self.interactor.Render()
         else:
             wx.MessageBox(
