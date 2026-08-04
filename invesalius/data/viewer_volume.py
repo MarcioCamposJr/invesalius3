@@ -768,6 +768,9 @@ class Viewer(wx.Panel):
         Publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")
 
         Publisher.subscribe(self.OnUpdateEEGElectrodes, "Update EEG electrodes")
+        Publisher.subscribe(
+            self.OnToggleEEGElectrodesVisibility, "Toggle EEG electrodes visibility"
+        )
 
     def get_vtk_mouse_position(self):
         """
@@ -1995,6 +1998,11 @@ class Viewer(wx.Panel):
             const.TEXT_SIZE_DISTANCE_DURING_NAVIGATION, (0.4, 0.9)
         )
         self.ren.AddActor(self.SpreadEfieldFactorTextActor.actor)
+
+    def OnToggleEEGElectrodesVisibility(self, show):
+        for actor in self.eeg_actors.values():
+            actor.SetVisibility(show)
+        self.UpdateRender()
 
     def OnUpdateEEGElectrodes(self, electrodes_data):
         import math

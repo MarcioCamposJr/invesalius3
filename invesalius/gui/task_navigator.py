@@ -2162,6 +2162,25 @@ class ControlPanel(wx.Panel):
         )
         self.show_motor_map_button = show_motor_map_button
 
+        # Button for Show EEG Electrodes
+        tooltip = _("Show/Hide EEG Electrodes")
+        BMP_SHOW_EEG = wx.Bitmap(
+            str(inv_paths.ICON_DIR.joinpath("brain_eye.png")), wx.BITMAP_TYPE_PNG
+        )
+        show_eeg_button = wx.ToggleButton(
+            scroll_panel, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        show_eeg_button.SetBackgroundColour(wx.Colour(0, 255, 0))
+        show_eeg_button.SetBitmap(BMP_SHOW_EEG)
+        show_eeg_button.SetToolTip(tooltip)
+        show_eeg_button.SetValue(True)
+        show_eeg_button.Enable(True)
+
+        show_eeg_button.Bind(
+            wx.EVT_TOGGLEBUTTON, partial(self.OnShowEEGButton, ctrl=show_eeg_button)
+        )
+        self.show_eeg_button = show_eeg_button
+
         # Button for EEG Digitization Wizard
         tooltip = _("Digitize EEG Electrodes")
         BMP_EEG = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("target.png")), wx.BITMAP_TYPE_PNG)
@@ -2198,6 +2217,7 @@ class ControlPanel(wx.Panel):
                 (show_coil_button),
                 (show_probe_button),
                 (show_motor_map_button),
+                (show_eeg_button),
                 (eeg_digitization_button),
             ]
         )
@@ -2739,6 +2759,18 @@ class ControlPanel(wx.Panel):
 
         dlg = EEGDigitizationDialog(self, self.nav_hub)
         dlg.Show()
+
+    def OnShowEEGButton(self, evt, ctrl):
+        is_shown = ctrl.GetValue()
+        self.UpdateToggleButton(ctrl)
+        Publisher.sendMessage("Toggle EEG electrodes visibility", show=is_shown)
+
+        # update EEG registration button color
+        if is_shown:
+            self.eeg_digitization_button.SetBackgroundColour(wx.Colour(0, 255, 0))
+        else:
+            self.eeg_digitization_button.SetBackgroundColour(wx.Colour(255, 0, 0))
+        self.eeg_digitization_button.Refresh()
 
 
 class MarkersPanel(wx.Panel, ColumnSorterMixin):
