@@ -8705,7 +8705,7 @@ class EEGDigitizationDialog(wx.Dialog):
             axis_norm = np.linalg.norm(axis)
 
             transform = vtkTransform()
-            transform.Translate(closest_point)
+            transform.Translate(position)
 
             if axis_norm > 1e-6:
                 axis = axis / axis_norm
@@ -8715,7 +8715,7 @@ class EEGDigitizationDialog(wx.Dialog):
                 transform.RotateWXYZ(180, 1, 0, 0)
 
             actor.SetUserTransform(transform)
-            final_pos = closest_point
+            final_pos = position
             final_norm = target_z
         else:
             actor.SetPosition(position)
