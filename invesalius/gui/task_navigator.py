@@ -2274,6 +2274,10 @@ class ControlPanel(wx.Panel):
         Publisher.subscribe(self.PressMotorMapButton, "Press motor map button")
         Publisher.subscribe(self.EnableMotorMapButton, "Enable motor map button")
         Publisher.subscribe(self.OnToggleEEGElectrodesColor, "Toggle EEG electrodes visibility")
+        Publisher.subscribe(self.OnUpdateEEGElectrodes, "Update EEG electrodes")
+
+        self.eeg_is_showing = True
+        self.eeg_has_electrodes = False
 
         # Conditions for enabling 'target mode' button:
         Publisher.subscribe(self.TrackObject, "Track object")
@@ -2740,11 +2744,22 @@ class ControlPanel(wx.Panel):
         dlg = EEGDigitizationDialog(self, self.nav_hub)
         dlg.Show()
 
+    def OnUpdateEEGElectrodes(self, electrodes_data):
+        self.eeg_has_electrodes = len(electrodes_data) > 0
+        self.UpdateEEGButtonColor()
+
     def OnToggleEEGElectrodesColor(self, show):
-        if show:
-            self.eeg_digitization_button.SetBackgroundColour(wx.Colour(0, 255, 0))
+        self.eeg_is_showing = show
+        self.UpdateEEGButtonColor()
+
+    def UpdateEEGButtonColor(self):
+        if self.eeg_has_electrodes:
+            if self.eeg_is_showing:
+                self.eeg_digitization_button.SetBackgroundColour(self.GREEN_COLOR)
+            else:
+                self.eeg_digitization_button.SetBackgroundColour(self.RED_COLOR)
         else:
-            self.eeg_digitization_button.SetBackgroundColour(wx.Colour(255, 0, 0))
+            self.eeg_digitization_button.SetBackgroundColour(self.GREY_COLOR)
         self.eeg_digitization_button.Refresh()
 
 
