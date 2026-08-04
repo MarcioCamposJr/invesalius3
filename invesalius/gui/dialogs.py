@@ -8797,7 +8797,7 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.compute_fiducial_alignment()
             self.eeg_montage.filter_outliers()
             self.eeg_montage.filter_duplicates()
-            _, results = self.eeg_montage.run_icp_matching()
+            mean_err, results = self.eeg_montage.run_icp_matching()
 
             # Update Table and Colors
             self.results_list.DeleteAllItems()

@@ -286,8 +286,7 @@ class EEGMontage(metaclass=Singleton):
         Source = template (to be moved), Target = captured cloud (fixed).
         """
         from vtkmodules.vtkCommonCore import vtkPoints
-        from vtkmodules.vtkCommonDataModel import vtkPolyData
-        from vtkmodules.vtkFiltersGeneral import vtkIterativeClosestPointTransform
+        from vtkmodules.vtkCommonDataModel import vtkIterativeClosestPointTransform, vtkPolyData
 
         src_vtk = vtkPoints()
         for pt in source_points:
