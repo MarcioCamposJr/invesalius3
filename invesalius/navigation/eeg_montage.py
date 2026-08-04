@@ -571,6 +571,9 @@ class EEGMontage(metaclass=Singleton):
             )
             self.labeled_electrodes.append(electrode)
 
+        # Step 6: Topological consistency check — fix neighbor swaps
+        self._fix_topological_swaps(template_final)
+
         self.mean_error_mm = float(np.mean([e.distance_mm for e in self.labeled_electrodes]))
         self.state = DigitizationState.MATCHING_DONE
 
@@ -621,6 +624,97 @@ class EEGMontage(metaclass=Singleton):
         """Apply a 4x4 transform to an (N, 3) array of points."""
         points_h = np.hstack([points, np.ones((len(points), 1))])
         return (transform @ points_h.T).T[:, :3]
+
+    def _fix_topological_swaps(self, template_final: np.ndarray) -> int:
+        """
+        Post-assignment topological consistency check.
+
+        For each pair of labeled electrodes that are template neighbors
+        (within a neighborhood radius), check if swapping their labels
+        would reduce the total pairwise distance. If so, perform the swap.
+
+        This catches cases where the Hungarian algorithm assigns incorrect
+        labels to adjacent electrodes due to small inter-electrode spacing
+        (common in 32ch and 64ch systems).
+
+        Returns: number of swaps performed.
+        """
+        if len(self.labeled_electrodes) < 2:
+            return 0
+
+        # Build lookup: label -> index in template_labels
+        label_to_tmpl_idx = {lbl: i for i, lbl in enumerate(self.template_labels)}
+
+        # Compute neighborhood radius from template (median inter-electrode distance)
+        from scipy.spatial.distance import pdist
+
+        if len(template_final) > 1:
+            all_dists = pdist(template_final)
+            neighbor_radius = float(np.median(all_dists)) * 0.6
+        else:
+            return 0
+
+        n_swaps = 0
+        max_swap_rounds = 3  # Limit iterations to avoid infinite loops
+
+        for _round in range(max_swap_rounds):
+            swapped_this_round = False
+
+            for i in range(len(self.labeled_electrodes)):
+                elec_a = self.labeled_electrodes[i]
+                tmpl_idx_a = label_to_tmpl_idx.get(elec_a.label)
+                if tmpl_idx_a is None:
+                    continue
+
+                for j in range(i + 1, len(self.labeled_electrodes)):
+                    elec_b = self.labeled_electrodes[j]
+                    tmpl_idx_b = label_to_tmpl_idx.get(elec_b.label)
+                    if tmpl_idx_b is None:
+                        continue
+
+                    # Only check template neighbors (close in template space)
+                    tmpl_dist = np.linalg.norm(
+                        template_final[tmpl_idx_a] - template_final[tmpl_idx_b]
+                    )
+                    if tmpl_dist > neighbor_radius:
+                        continue
+
+                    # Current cost: a↔tmpl_a + b↔tmpl_b
+                    cost_current = elec_a.distance_mm + elec_b.distance_mm
+
+                    # Swapped cost: a↔tmpl_b + b↔tmpl_a
+                    dist_a_to_b = float(
+                        np.linalg.norm(elec_a.position_inv - template_final[tmpl_idx_b])
+                    )
+                    dist_b_to_a = float(
+                        np.linalg.norm(elec_b.position_inv - template_final[tmpl_idx_a])
+                    )
+                    cost_swapped = dist_a_to_b + dist_b_to_a
+
+                    # Swap if it reduces total cost by at least 1mm
+                    if cost_swapped < cost_current - 1.0:
+                        elec_a.label, elec_b.label = elec_b.label, elec_a.label
+                        elec_a.template_position = template_final[tmpl_idx_b]
+                        elec_b.template_position = template_final[tmpl_idx_a]
+                        elec_a.distance_mm = dist_a_to_b
+                        elec_b.distance_mm = dist_b_to_a
+
+                        # Update confidence
+                        for elec in (elec_a, elec_b):
+                            if elec.distance_mm < 5.0:
+                                elec.confidence = ConfidenceLevel.HIGH
+                            elif elec.distance_mm < 10.0:
+                                elec.confidence = ConfidenceLevel.MEDIUM
+                            else:
+                                elec.confidence = ConfidenceLevel.LOW
+
+                        n_swaps += 1
+                        swapped_this_round = True
+
+            if not swapped_this_round:
+                break
+
+        return n_swaps
 
     # --- Manual Correction ---
 
