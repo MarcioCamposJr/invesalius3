@@ -463,7 +463,9 @@ class Navigation(metaclass=Singleton):
                 self.r_stylus = np.array(state["r_stylus"])
 
     def CoilSelectionDone(self):
-        return len(self.coil_registrations) == self.n_coils
+        if getattr(self, "eeg_only", False):
+            return True
+        return self.n_coils > 0 and self.n_coils == len(self.coil_registrations)
 
     def SelectCoil(self, coil_name, coil_registration):
         if coil_registration is not None:  # Add the coil to selection

@@ -1798,6 +1798,7 @@ class StimulatorPage(wx.Panel):
 
     def CoilSelectionDone(self, done):
         if hasattr(self, "cb_eeg_only") and self.cb_eeg_only.GetValue():
+            self.navigation.eeg_only = True
             self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
             self.next_button.Enable(True)
             self.lbl.Show()
@@ -1815,6 +1816,7 @@ class StimulatorPage(wx.Panel):
 
     def OnEEGOnly(self, evt):
         is_eeg_only = self.cb_eeg_only.GetValue()
+        self.navigation.eeg_only = is_eeg_only
         if is_eeg_only:
             self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
             self.next_button.Enable(True)

@@ -1996,13 +1996,11 @@ class Viewer(wx.Panel):
         )
         self.ren.AddActor(self.SpreadEfieldFactorTextActor.actor)
 
-    def OnUpdateEEGElectrodes(self, pubsub_evt):
+    def OnUpdateEEGElectrodes(self, electrodes_data):
         import math
 
         import numpy as np
         import vtk
-
-        electrodes_data = pubsub_evt.data
 
         # Clear existing
         for actor in self.eeg_actors.values():
