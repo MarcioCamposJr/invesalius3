@@ -8575,6 +8575,7 @@ class EEGDigitizationDialog(wx.Dialog):
         self.results_list.InsertColumn(2, _("Distance (mm)"), width=100)
         self.results_list.InsertColumn(3, _("Confidence"), width=100)
         self.results_list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.OnRightClickItem)
+        self.results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected)
         right_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 5)
 
         btn_process = wx.Button(right_panel, -1, _("Process and Match Electrodes"))
@@ -8852,11 +8853,34 @@ class EEGDigitizationDialog(wx.Dialog):
         if hasattr(self, "interactor"):
             self.interactor.Render()
 
+        self.electrode_data = eeg_data
         Publisher.sendMessage("Update EEG electrodes", electrodes_data=eeg_data)
 
     def OnRightClickItem(self, evt):
         self.selected_item = evt.GetIndex()
         menu = wx.Menu()
+
+    def OnItemSelected(self, evt):
+        idx = evt.GetIndex()
+        if not hasattr(self, "electrode_data") or idx >= len(self.electrode_data):
+            return
+
+        data = self.electrode_data[idx]
+
+        # Reset all colors and highlight selected
+        for i, edata in enumerate(self.electrode_data):
+            actor = self.electrode_actors.get(edata["name"])
+            if actor:
+                if i == idx:
+                    actor.GetProperty().SetColor(1.0, 1.0, 0.0)  # Yellow highlight
+                else:
+                    actor.GetProperty().SetColor(edata["color"])
+
+        # Focus camera
+        self._focus_camera(data["position"], normal=data["normal"])
+
+        if hasattr(self, "interactor"):
+            self.interactor.Render()
 
         if (
             hasattr(self.eeg_montage, "matched_labels")
