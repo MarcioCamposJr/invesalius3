@@ -1728,7 +1728,7 @@ class StimulatorPage(wx.Panel):
         wx.Panel.__init__(self, parent)
         self.navigation = nav_hub.navigation
 
-        border = wx.FlexGridSizer(2, 2, 5)
+        border = wx.FlexGridSizer(1, 2, 1)
         self.coil_registrations = []
 
         lbl = wx.StaticText(
@@ -1763,8 +1763,6 @@ class StimulatorPage(wx.Panel):
             [
                 (lbl, 1, wx.EXPAND),
                 (btn_edit, 1, wx.EXPAND),
-                (self.cb_eeg_only, 1, wx.EXPAND),
-                (wx.StaticText(self, -1, ""), 1, wx.EXPAND),
             ]
         )
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -1781,6 +1779,7 @@ class StimulatorPage(wx.Panel):
             [
                 (border, 0, wx.ALIGN_CENTER | wx.TOP, 10),
                 stretch_spacer,
+                (self.cb_eeg_only, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10),
                 (bottom_sizer, 0, wx.EXPAND | wx.BOTTOM, 10),
             ]
         )
@@ -1953,6 +1952,7 @@ class ControlPanel(wx.Panel):
         self.tractography_checkbox = tractography_checkbox
 
         # Toggle button to track the coil
+        has_coil = self.navigation.CoilSelectionDone()
         tooltip = _("Track coil")
         BMP_TRACK = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("coil.png")), wx.BITMAP_TYPE_PNG)
         track_object_button = wx.ToggleButton(
@@ -1960,7 +1960,7 @@ class ControlPanel(wx.Panel):
         )
         track_object_button.SetBackgroundColour(GREY_COLOR)
         track_object_button.SetBitmap(BMP_TRACK)
-        track_object_button.Enable(True)
+        track_object_button.Enable(has_coil)
         track_object_button.SetValue(False)
         track_object_button.SetToolTip(tooltip)
         track_object_button.Bind(
@@ -1998,7 +1998,7 @@ class ControlPanel(wx.Panel):
         show_coil_button.SetBitmap(BMP_SHOW_COIL)
         show_coil_button.SetToolTip(tooltip)
         show_coil_button.SetValue(False)
-        show_coil_button.Enable(True)
+        show_coil_button.Enable(has_coil)
         show_coil_button.Bind(wx.EVT_TOGGLEBUTTON, self.OnShowCoil)
         show_coil_button.Bind(wx.EVT_RIGHT_DOWN, self.ShowCoilChoice)
         self.show_coil_button = show_coil_button
@@ -2400,6 +2400,8 @@ class ControlPanel(wx.Panel):
             self.UpdateToggleButton(self.checkbox_serial_port)
 
     def OnCoilSelectionDone(self, done):
+        self.EnableTrackObjectButton(done)
+        self.EnableShowCoilButton(done)
         self.PressTrackObjectButton(done)
         self.PressShowCoilButton(pressed=done)
 
