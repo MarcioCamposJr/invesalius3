@@ -2075,6 +2075,27 @@ class Viewer(wx.Panel):
             self.ren.AddActor(actor)
             self.eeg_actors[name] = actor
 
+            # Add text label
+            text_source = vtk.vtkVectorText()
+            text_source.SetText(name)
+
+            text_mapper = vtk.vtkPolyDataMapper()
+            text_mapper.SetInputConnection(text_source.GetOutputPort())
+
+            text_actor = vtk.vtkFollower()
+            text_actor.SetMapper(text_mapper)
+            text_actor.SetScale(1.5, 1.5, 1.5)
+            text_actor.GetProperty().SetColor(*color)
+
+            # Offset text slightly outwards along the normal vector
+            offset_pos = np.array(position) + target_z * 6.0
+            text_actor.SetPosition(offset_pos)
+            text_actor.SetCamera(self.ren.GetActiveCamera())
+            text_actor.SetVisibility(show)
+
+            self.ren.AddActor(text_actor)
+            self.eeg_actors[f"{name}_text"] = text_actor
+
         self.UpdateRender()
 
     def CalculateDistanceMaxEfieldCoGE(self):

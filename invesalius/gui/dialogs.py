@@ -8839,6 +8839,28 @@ class EEGDigitizationDialog(wx.Dialog):
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
+            # Add text label
+            text_source = vtk.vtkVectorText()
+            text_source.SetText(name)
+
+            text_mapper = vtk.vtkPolyDataMapper()
+            text_mapper.SetInputConnection(text_source.GetOutputPort())
+
+            text_actor = vtk.vtkFollower()
+            text_actor.SetMapper(text_mapper)
+            text_actor.SetScale(1.5, 1.5, 1.5)
+            text_actor.GetProperty().SetColor(*color)
+
+            # Offset text slightly outwards along the normal vector
+            import numpy as np
+
+            offset_pos = np.array(final_coord) + np.array(target_z) * 6.0
+            text_actor.SetPosition(offset_pos)
+            text_actor.SetCamera(self.ren.GetActiveCamera())
+
+            self.ren.AddActor(text_actor)
+            self.electrode_actors[f"{name}_text"] = text_actor
+
             eeg_data.append(
                 {
                     "name": name,
