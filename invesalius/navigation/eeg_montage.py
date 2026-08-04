@@ -409,9 +409,10 @@ class EEGMontage(metaclass=Singleton):
         """
         Complete Point Cloud Matching pipeline:
         1. Filter duplicates and outliers
-        2. Initial alignment via fiducials (Nasion/LPA/RPA)
-        3. ICP refinement (template -> point cloud)
-        4. Labeling via minimum Euclidean distance (Hungarian algorithm)
+        2. Initial alignment via fiducials (Nasion/LPA/RPA) with uniform scaling
+        3. Template subsetting (keep only the M closest channels to point cloud)
+        4. Iterative ICP refinement + Hungarian assignment (up to max_iterations)
+        5. Final labeling with confidence metrics
 
         Returns: (mean_error_mm, list of LabeledElectrode)
         """
@@ -432,35 +433,112 @@ class EEGMontage(metaclass=Singleton):
         self.filter_duplicates()
         self.filter_outliers()
 
-        # Step 2: Fiducial alignment
+        # Step 2: Fiducial alignment (with scale)
         if progress_callback:
             progress_callback(1, _("Initial fiducial alignment..."))
         m_fiducial = self.compute_fiducial_alignment()
         template_aligned = self.apply_transform_to_template(m_fiducial)
 
-        # Step 3: ICP refinement
-        # Source = template (to be moved), Target = point cloud (fixed ground truth)
+        point_cloud = self.get_point_cloud_array()
+        M = len(point_cloud)
+        N = len(template_aligned)
+
+        # Step 3: Template subsetting when M < N
+        # Keep only the closest channels to avoid ICP distortion from many
+        # unmatched template points pulling the registration off.
+        if M < N:
+            subset_indices = self._select_template_subset(template_aligned, point_cloud)
+        else:
+            subset_indices = np.arange(N)
+
+        template_subset = template_aligned[subset_indices]
+
+        # Step 4: Iterative ICP + Hungarian refinement
         if progress_callback:
             progress_callback(2, _("ICP refinement..."))
-        m_icp = self._run_vtk_icp(
-            source_points=template_aligned,
-            target_points=self.get_point_cloud_array(),
-        )
 
-        # Total transform: first fiducial alignment, then ICP refinement
-        self.icp_transform = m_icp @ m_fiducial
-        template_final = self.apply_transform_to_template(self.icp_transform)
+        max_iterations = 5
+        convergence_threshold_mm = 0.1
+        outlier_threshold_mm = 20.0
+        prev_mean_error = float("inf")
 
-        # Step 4: Labeling (Hungarian assignment)
+        current_template = template_subset.copy()
+        current_transform = m_fiducial.copy()
+        best_transform = current_transform.copy()
+
+        for iteration in range(max_iterations):
+            # ICP: move template toward point cloud
+            m_icp = self._run_vtk_icp(
+                source_points=current_template,
+                target_points=point_cloud,
+            )
+
+            # Accumulate transform
+            current_transform = m_icp @ current_transform
+            current_template = self._apply_transform_to_points(
+                self.template_positions[subset_indices], current_transform
+            )
+
+            # Hungarian assignment on current positions
+            cost_matrix = cdist(point_cloud, current_template)
+            if M <= len(current_template):
+                row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            else:
+                row_ind_t, col_ind_t = linear_sum_assignment(cost_matrix.T)
+                row_ind, col_ind = col_ind_t, row_ind_t
+
+            # Compute per-pair distances
+            pair_dists = np.array([cost_matrix[r, c] for r, c in zip(row_ind, col_ind)])
+            mean_error = float(pair_dists.mean())
+
+            # Check convergence
+            improvement = prev_mean_error - mean_error
+            if abs(improvement) < convergence_threshold_mm:
+                best_transform = current_transform.copy()
+                break
+
+            prev_mean_error = mean_error
+            best_transform = current_transform.copy()
+
+            # Filter outlier pairs for next ICP iteration
+            # Only use well-matched pairs as ICP targets for next round
+            good_mask = pair_dists < outlier_threshold_mm
+            if good_mask.sum() < 3:
+                break  # Not enough good pairs
+
+            # For next ICP: use only the good matched template positions
+            good_template_indices = col_ind[good_mask]
+            current_template = self._apply_transform_to_points(
+                self.template_positions[subset_indices[good_template_indices]],
+                current_transform,
+            )
+            point_cloud_for_icp = point_cloud[row_ind[good_mask]]
+
+            # Re-run ICP with filtered pairs only
+            if iteration < max_iterations - 1:
+                m_icp_refined = self._run_vtk_icp(
+                    source_points=current_template,
+                    target_points=point_cloud_for_icp,
+                )
+                current_transform = m_icp_refined @ current_transform
+
+            # Restore full template subset for next assignment
+            current_template = self._apply_transform_to_points(
+                self.template_positions[subset_indices], current_transform
+            )
+
+        # Step 5: Final assignment with the best transform (using ALL template channels)
         if progress_callback:
-            progress_callback(3, _("Labeling assignments..."))
-        point_cloud = self.get_point_cloud_array()
-        cost_matrix = cdist(point_cloud, template_final)  # (M, N)
+            progress_callback(3, _("Final labeling..."))
 
+        self.icp_transform = best_transform
+        template_final = self.apply_transform_to_template(best_transform)
+        point_cloud = self.get_point_cloud_array()
+
+        cost_matrix = cdist(point_cloud, template_final)
         if len(point_cloud) <= len(template_final):
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
         else:
-            # More points than channels, transpose
             row_ind_t, col_ind_t = linear_sum_assignment(cost_matrix.T)
             row_ind, col_ind = col_ind_t, row_ind_t
 
@@ -497,6 +575,52 @@ class EEGMontage(metaclass=Singleton):
         self.state = DigitizationState.MATCHING_DONE
 
         return self.mean_error_mm, self.labeled_electrodes
+
+    def _select_template_subset(
+        self, template_positions: np.ndarray, point_cloud: np.ndarray
+    ) -> np.ndarray:
+        """
+        Select a subset of template channels closest to the captured point cloud.
+        For each captured point, find the nearest template channel and build a
+        unique set. Then add a margin of nearby channels to improve ICP robustness.
+
+        Returns: array of indices into template_positions.
+        """
+        from scipy.spatial.distance import cdist
+
+        M = len(point_cloud)
+        N = len(template_positions)
+
+        # For each captured point, find the nearest template channel
+        dist_matrix = cdist(point_cloud, template_positions)  # (M, N)
+        nearest_per_point = np.argmin(dist_matrix, axis=1)  # (M,)
+        selected = set(nearest_per_point)
+
+        # Add margin: for each selected channel, also include its k nearest
+        # template neighbors to give ICP more geometric context
+        k_neighbors = min(3, N // max(M, 1))
+        if k_neighbors > 0:
+            tmpl_dist = cdist(template_positions, template_positions)  # (N, N)
+            for idx in list(selected):
+                neighbor_indices = np.argsort(tmpl_dist[idx])[1 : k_neighbors + 1]
+                selected.update(neighbor_indices)
+
+        # Cap at min(2*M, N) to avoid including the whole template
+        selected_arr = np.array(sorted(selected))
+        max_subset = min(2 * M, N)
+        if len(selected_arr) > max_subset:
+            # Keep the ones with smallest distance to any captured point
+            min_dists = dist_matrix[:, selected_arr].min(axis=0)
+            keep = np.argsort(min_dists)[:max_subset]
+            selected_arr = selected_arr[keep]
+
+        return selected_arr
+
+    @staticmethod
+    def _apply_transform_to_points(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
+        """Apply a 4x4 transform to an (N, 3) array of points."""
+        points_h = np.hstack([points, np.ones((len(points), 1))])
+        return (transform @ points_h.T).T[:, :3]
 
     # --- Manual Correction ---
 
