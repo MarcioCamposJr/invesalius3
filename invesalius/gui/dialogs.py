@@ -8625,13 +8625,16 @@ class EEGDigitizationDialog(wx.Dialog):
             if surface and hasattr(surface, "polydata"):
                 self.polydata = surface.polydata
 
-                self.surface_locator = vtk.vtkCellLocator()
+                from vtkmodules.vtkCommonDataModel import vtkCellLocator
+                from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
+
+                self.surface_locator = vtkCellLocator()
                 self.surface_locator.SetDataSet(self.polydata)
                 self.surface_locator.BuildLocator()
 
                 self.surface_normals = self.polydata.GetCellData().GetNormals()
                 if not self.surface_normals:
-                    norm = vtk.vtkPolyDataNormals()
+                    norm = vtkPolyDataNormals()
                     norm.SetInputData(self.polydata)
                     norm.ComputePointNormalsOn()
                     norm.ComputeCellNormalsOn()
