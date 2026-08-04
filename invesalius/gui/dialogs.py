@@ -8860,7 +8860,9 @@ class EEGDigitizationDialog(wx.Dialog):
             self.interactor.Render()
 
         self.electrode_data = eeg_data
-        Publisher.sendMessage("Update EEG electrodes", electrodes_data=eeg_data)
+        Publisher.sendMessage(
+            "Update EEG electrodes", electrodes_data=eeg_data, show=self.eeg_montage.show_electrodes
+        )
 
     def OnRightClickItem(self, evt):
         self.selected_item = evt.GetIndex()

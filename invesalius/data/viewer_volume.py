@@ -2004,7 +2004,7 @@ class Viewer(wx.Panel):
             actor.SetVisibility(show)
         self.UpdateRender()
 
-    def OnUpdateEEGElectrodes(self, electrodes_data):
+    def OnUpdateEEGElectrodes(self, electrodes_data, show=True):
         import math
 
         import numpy as np
@@ -2065,6 +2065,7 @@ class Viewer(wx.Panel):
                 transform.RotateWXYZ(180, 1, 0, 0)
 
             actor.SetUserTransform(transform)
+            actor.SetVisibility(show)
 
             self.ren.AddActor(actor)
             self.eeg_actors[name] = actor
