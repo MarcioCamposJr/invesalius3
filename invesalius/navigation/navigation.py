@@ -190,7 +190,7 @@ class UpdateNavigationScene(threading.Thread):
                     position=[coord[0], -coord[1], coord[2]],
                 )
 
-                if coil_visible and main_coil is not None:
+                if coil_visible and main_coil in m_imgs:
                     Publisher.sendMessage("Update coil poses", m_imgs=m_imgs, coords=coords)
                     Publisher.sendMessage(
                         "Update coil pose",
