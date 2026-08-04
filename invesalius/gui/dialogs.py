@@ -8713,6 +8713,12 @@ class EEGDigitizationDialog(wx.Dialog):
             else:
                 target_z = np.array([0, 0, 1])
 
+            # Ensure normal points outward from the center of the mesh
+            center = np.array(self.polydata.GetCenter())
+            vec_from_center = position - center
+            if np.dot(target_z, vec_from_center) < 0:
+                target_z = -target_z
+
             source_z = np.array([0, 0, 1])
             axis = np.cross(source_z, target_z)
             axis_norm = np.linalg.norm(axis)
