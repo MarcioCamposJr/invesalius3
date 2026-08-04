@@ -8613,7 +8613,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
         self.interactor.Enable(1)
         self.ren = vtkRenderer()
-        self.ren.SetBackground(0.1, 0.1, 0.2)
+        self.ren.SetBackground(0.0, 0.0, 0.0)
         self.interactor.GetRenderWindow().AddRenderer(self.ren)
 
         # Load head surface from project
@@ -8656,6 +8656,26 @@ class EEGDigitizationDialog(wx.Dialog):
 
         return actor
 
+    def _focus_camera(self, position):
+        import numpy as np
+
+        cam = self.ren.GetActiveCamera()
+
+        center = np.array(cam.GetFocalPoint())
+        old_pos = np.array(cam.GetPosition())
+        target = np.array(position)
+
+        distance = np.linalg.norm(old_pos - center)
+        direction = target - center
+        dir_norm = np.linalg.norm(direction)
+
+        if dir_norm > 0:
+            direction = direction / dir_norm
+            new_pos = center + direction * distance
+            cam.SetPosition(new_pos[0], new_pos[1], new_pos[2])
+            cam.SetViewUp(0, 0, 1)
+            self.ren.ResetCameraClippingRange()
+
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
             count = len(self.eeg_montage.point_cloud)
@@ -8673,6 +8693,7 @@ class EEGDigitizationDialog(wx.Dialog):
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
+            self._focus_camera(self.current_coord)
             self.interactor.Render()
         else:
             wx.MessageBox(
