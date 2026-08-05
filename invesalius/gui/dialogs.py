@@ -8971,6 +8971,35 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def OnCaptureElectrode(self, evt=None):
         if self.current_coord is not None:
+            # Check visibility before capturing
+            if (
+                hasattr(self, "nav_hub")
+                and hasattr(self.nav_hub, "tracker")
+                and self.nav_hub.tracker.IsTrackerInitialized()
+            ):
+                import invesalius.constants as const
+
+                ref_mode_id = self.nav_hub.navigation.GetReferenceMode()
+
+                # Fetch fresh coordinates and visibility flags
+                marker_visibilities, _, _ = self.nav_hub.tracker.GetTrackerCoordinates(
+                    ref_mode_id=ref_mode_id, n_samples=1
+                )
+
+                if not marker_visibilities[0]:
+                    wx.MessageBox(
+                        _("Probe not visible to tracker!"), _("InVesalius 3"), wx.ICON_WARNING
+                    )
+                    return
+
+                if ref_mode_id == const.DYNAMIC_REF and not marker_visibilities[1]:
+                    wx.MessageBox(
+                        _("Head reference not visible to tracker!"),
+                        _("InVesalius 3"),
+                        wx.ICON_WARNING,
+                    )
+                    return
+
             if self.eeg_montage.labeled_electrodes:
                 self.eeg_montage.labeled_electrodes.clear()
 
