@@ -8792,6 +8792,10 @@ class EEGDigitizationDialog(wx.Dialog):
         self.interactor.Render()
 
     def _refresh_list(self):
+        import numpy as np
+        from vtkmodules.vtkRenderingCore import vtkFollower, vtkPolyDataMapper
+        from vtkmodules.vtkRenderingFreeType import vtkVectorText
+
         # Clear existing actors
         for actor in self.electrode_actors.values():
             self.ren.RemoveActor(actor)
@@ -8840,21 +8844,18 @@ class EEGDigitizationDialog(wx.Dialog):
             self.electrode_actors[name] = actor
 
             # Add text label
-            import vtk
-
-            text_source = vtk.vtkVectorText()
+            text_source = vtkVectorText()
             text_source.SetText(name)
 
-            text_mapper = vtk.vtkPolyDataMapper()
+            text_mapper = vtkPolyDataMapper()
             text_mapper.SetInputConnection(text_source.GetOutputPort())
 
-            text_actor = vtk.vtkFollower()
+            text_actor = vtkFollower()
             text_actor.SetMapper(text_mapper)
             text_actor.SetScale(1.5, 1.5, 1.5)
             text_actor.GetProperty().SetColor(*color)
 
             # Offset text slightly outwards along the normal vector
-            import numpy as np
 
             offset_pos = np.array(final_coord) + np.array(target_z) * 6.0
             text_actor.SetPosition(offset_pos)
