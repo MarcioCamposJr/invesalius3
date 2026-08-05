@@ -8840,6 +8840,8 @@ class EEGDigitizationDialog(wx.Dialog):
             self.electrode_actors[name] = actor
 
             # Add text label
+            import vtk
+
             text_source = vtk.vtkVectorText()
             text_source.SetText(name)
 
