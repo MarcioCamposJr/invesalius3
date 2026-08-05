@@ -8793,8 +8793,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def _refresh_list(self):
         import numpy as np
-        from vtkmodules.vtkRenderingCore import vtkFollower, vtkPolyDataMapper
-        from vtkmodules.vtkRenderingFreeType import vtkVectorText
+        from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D
 
         # Clear existing actors
         for actor in self.electrode_actors.values():
@@ -8843,23 +8842,28 @@ class EEGDigitizationDialog(wx.Dialog):
             self.ren.AddActor(actor)
             self.electrode_actors[name] = actor
 
-            # Add text label
-            text_source = vtkVectorText()
-            text_source.SetText(name)
+            # Add text label (Billboard)
+            text_actor = vtkBillboardTextActor3D()
+            text_actor.SetInput(name)
 
-            text_mapper = vtkPolyDataMapper()
-            text_mapper.SetInputConnection(text_source.GetOutputPort())
+            # Configure Text Property for better visibility
+            text_prop = text_actor.GetTextProperty()
+            text_prop.SetFontSize(28)  # Increase size
+            text_prop.SetColor(*color)
+            text_prop.SetBold(True)
+            text_prop.SetShadow(True)
+            text_prop.SetShadowOffset(2, -2)
 
-            text_actor = vtkFollower()
-            text_actor.SetMapper(text_mapper)
-            text_actor.SetScale(1.5, 1.5, 1.5)
-            text_actor.GetProperty().SetColor(*color)
+            # Add a strong gray border/frame
+            text_prop.SetFrame(True)
+            text_prop.SetFrameColor(0.2, 0.2, 0.2)
+            text_prop.SetFrameWidth(2)
+            text_prop.SetBackgroundColor(0.3, 0.3, 0.3)
+            text_prop.SetBackgroundOpacity(0.85)
 
             # Offset text slightly outwards along the normal vector
-
             offset_pos = np.array(final_coord) + np.array(target_z) * 6.0
             text_actor.SetPosition(offset_pos)
-            text_actor.SetCamera(self.ren.GetActiveCamera())
 
             self.ren.AddActor(text_actor)
             self.electrode_actors[f"{name}_text"] = text_actor
