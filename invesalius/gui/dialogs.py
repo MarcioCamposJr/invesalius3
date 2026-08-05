@@ -2169,7 +2169,7 @@ class CalculateSurfacePropertiesProgressWindow:
         self.dlg = wx.ProgressDialog(title, message, parent=parent, style=style)
         self.dlg.Show()
 
-    def Update(self, msg: Optional[str] = None, value=None) -> None:
+    def Update(self, msg: str | None = None, value=None) -> None:
         if msg is None:
             self.dlg.Pulse()
         else:
@@ -7995,7 +7995,7 @@ class ProgressBarHandler(wx.ProgressDialog):
 class ProjectLoadProgressDialog:
     """Progress dialog for loading .inv3 project files with cancellation support."""
 
-    def __init__(self, parent: Optional[wx.Window] = None):
+    def __init__(self, parent: wx.Window | None = None):
         if parent is None:
             parent = wx.GetApp().GetTopWindow()
 
@@ -8610,7 +8610,7 @@ class EEGDigitizationDialog(wx.Dialog):
         lbl_export_format = wx.StaticText(self, -1, _("Format:"))
         bottom_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS"])
+        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS", "HPTS"])
         self.choice_export_format.SetSelection(0)
         bottom_sizer.Add(self.choice_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
@@ -9144,6 +9144,8 @@ class EEGDigitizationDialog(wx.Dialog):
         fmt = self.choice_export_format.GetStringSelection()
         if fmt == "BIDS":
             self.OnExportBIDS(evt)
+        elif fmt == "HPTS":
+            self.OnExportHPTS(evt)
 
     def OnExportBIDS(self, evt):
         dlg = wx.DirDialog(
@@ -9154,5 +9156,18 @@ class EEGDigitizationDialog(wx.Dialog):
         if dlg.ShowModal() == wx.ID_OK:
             path = dlg.GetPath()
             self.eeg_montage.export_bids(path)
+            wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
+        dlg.Destroy()
+
+    def OnExportHPTS(self, evt):
+        dlg = wx.FileDialog(
+            self,
+            _("Save HPTS File"),
+            wildcard="HPTS files (*.hpts)|*.hpts",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self.eeg_montage.export_hpts(path)
             wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
         dlg.Destroy()

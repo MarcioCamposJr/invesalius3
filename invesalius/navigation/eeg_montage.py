@@ -29,13 +29,16 @@ Responsibility:
 - Export in EEG-BIDS format.
 """
 
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
+import wx
 
 from invesalius.utils import Singleton
+
+_ = wx.GetTranslation
 
 
 class DigitizationState(Enum):
@@ -75,25 +78,25 @@ class EEGMontage(metaclass=Singleton):
         self.state: DigitizationState = DigitizationState.IDLE
 
         # Template data
-        self.template_name: Optional[str] = None
-        self.template_positions: Optional[np.ndarray] = None  # (N, 3)
-        self.template_labels: Optional[List[str]] = None  # N labels
+        self.template_name: str | None = None
+        self.template_positions: np.ndarray | None = None  # (N, 3)
+        self.template_labels: list[str] | None = None  # N labels
 
         # Fiducials (3 points: Nasion, LPA, RPA) in tracker->InVesalius space
-        self.fiducials_inv: Dict[str, Optional[np.ndarray]] = {
+        self.fiducials_inv: dict[str, np.ndarray | None] = {
             "nasion": None,
             "lpa": None,
             "rpa": None,
         }
 
         # Captured point cloud (M anonymous points)
-        self.point_cloud: List[np.ndarray] = []
+        self.point_cloud: list[np.ndarray] = []
 
         # Matching results
-        self.labeled_electrodes: List[LabeledElectrode] = []
-        self.icp_transform: Optional[np.ndarray] = None  # (4,4) affine matrix
+        self.labeled_electrodes: list[LabeledElectrode] = []
+        self.icp_transform: np.ndarray | None = None  # (4,4) affine matrix
         self.head_scale_factor: float = 1.0  # captured/template head size ratio
-        self.mean_error_mm: Optional[float] = None
+        self.mean_error_mm: float | None = None
         self.show_electrodes: bool = True
 
         from pubsub import pub as Publisher
@@ -205,7 +208,7 @@ class EEGMontage(metaclass=Singleton):
     # --- Template Loading (via MNE) ---
 
     @staticmethod
-    def get_available_templates() -> List[str]:
+    def get_available_templates() -> list[str]:
         """Returns a list of available EEG montage templates from MNE."""
         try:
             import mne
@@ -284,7 +287,7 @@ class EEGMontage(metaclass=Singleton):
 
     # --- Outlier and Duplicate Filtering ---
 
-    def filter_outliers(self, std_factor: float = 2.5) -> List[int]:
+    def filter_outliers(self, std_factor: float = 2.5) -> list[int]:
         """
         Remove outlier points (accidental clicks outside the head).
         Uses distance to centroid with a threshold based on standard deviation.
@@ -420,8 +423,8 @@ class EEGMontage(metaclass=Singleton):
     # --- Matching Pipeline and Labeling ---
 
     def run_icp_matching(
-        self, progress_callback: Optional[Callable[[int, str], None]] = None
-    ) -> Tuple[float, List[LabeledElectrode]]:
+        self, progress_callback: Callable[[int, str], None] | None = None
+    ) -> tuple[float, list[LabeledElectrode]]:
         """
         Complete Point Cloud Matching pipeline:
         1. Filter duplicates and outliers
@@ -739,7 +742,7 @@ class EEGMontage(metaclass=Singleton):
 
     # --- Marker Integration ---
 
-    def create_markers(self) -> List[int]:
+    def create_markers(self) -> list[int]:
         """
         Instantiate Marker objects for each labeled electrode and add them to MarkersControl.
         Returns the list of marker IDs created.
@@ -775,7 +778,7 @@ class EEGMontage(metaclass=Singleton):
 
     # --- BIDS Export ---
 
-    def export_bids(self, output_dir: str, subject_id: str = "01") -> Tuple[str, str]:
+    def export_bids(self, output_dir: str, subject_id: str = "01") -> tuple[str, str]:
         """
         Export in EEG-BIDS format:
         - electrodes.tsv: name, x, y, z (Scanner RAS in mm)
@@ -844,3 +847,39 @@ class EEGMontage(metaclass=Singleton):
 
         self.state = DigitizationState.EXPORTED
         return electrodes_path, coordsystem_path
+
+    def export_hpts(self, filepath: str) -> str:
+        """
+        Export in MNE Head Points (.hpts) format.
+        Includes fiducials (cardinal) and electrodes (eeg).
+        Uses world coordinates (Scanner RAS).
+        """
+        from invesalius.data import imagedata_utils
+
+        lines = [
+            "# Digitized points exported by InVesalius 3",
+            "# Coordinate system: Scanner RAS",
+        ]
+
+        # Fiducial mapping: 1=nasion, 2=lpa, 3=rpa
+        fid_map = {"nasion": 1, "lpa": 2, "rpa": 3}
+        for fid_name, fid_id in fid_map.items():
+            fid_pos = self.fiducials_inv.get(fid_name)
+            if fid_pos is not None:
+                pos_world, _ori = imagedata_utils.convert_invesalius_to_world(
+                    position=list(fid_pos), orientation=[0, 0, 0]
+                )
+                if pos_world[0] is not None:
+                    x, y, z = pos_world[:3]
+                    lines.append(f"cardinal {fid_id} {x:.2f} {y:.2f} {z:.2f}")
+
+        # Electrodes
+        for elec in sorted(self.labeled_electrodes, key=lambda e: e.label):
+            x, y, z = elec.position_world
+            lines.append(f"eeg {elec.label} {x:.2f} {y:.2f} {z:.2f}")
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+        self.state = DigitizationState.EXPORTED
+        return filepath
