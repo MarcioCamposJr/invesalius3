@@ -8985,8 +8985,8 @@ class EEGDigitizationDialog(wx.Dialog):
                 ref_mode_id = self.nav_hub.navigation.GetReferenceMode()
 
                 # Fetch fresh coordinates and visibility flags
-                marker_visibilities, _, _ = self.nav_hub.tracker.GetTrackerCoordinates(
-                    ref_mode_id=ref_mode_id, n_samples=1
+                marker_visibilities, dummy_coord, dummy_raw = (
+                    self.nav_hub.tracker.GetTrackerCoordinates(ref_mode_id=ref_mode_id, n_samples=1)
                 )
 
                 if not marker_visibilities[0]:
