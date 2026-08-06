@@ -40,6 +40,7 @@ import invesalius.session as ses
 from invesalius.data.markers.marker import MarkerType
 from invesalius.data.visualization.mep_visualizer import MEPVisualizer
 from invesalius.i18n import tr as _
+from invesalius.navigation.eeg_montage import EEGMontage
 from invesalius.navigation.image import Image
 from invesalius.navigation.iterativeclosestpoint import IterativeClosestPoint
 from invesalius.navigation.markers import MarkersControl
@@ -72,6 +73,7 @@ class NavigationHub(metaclass=Singleton):
         )
         self.markers = MarkersControl(robot=self.robot)
         self.mep_visualizer = MEPVisualizer()
+        self.eeg_montage = EEGMontage()
         Publisher.sendMessage("Add navigation context to interactive shell")
 
 
@@ -188,7 +190,7 @@ class UpdateNavigationScene(threading.Thread):
                     position=[coord[0], -coord[1], coord[2]],
                 )
 
-                if coil_visible:
+                if coil_visible and main_coil in m_imgs:
                     Publisher.sendMessage("Update coil poses", m_imgs=m_imgs, coords=coords)
                     Publisher.sendMessage(
                         "Update coil pose",
@@ -267,7 +269,7 @@ class UpdateNavigationScene(threading.Thread):
                             Publisher.sendMessage,
                             "Update tract seed based efield",
                             coord_tracts_queue=self.navigation.coord_tracts_queue,
-                            fallback_m_img=m_imgs[main_coil],
+                            fallback_m_img=m_imgs.get(main_coil, m_imgs.get("probe")),
                             current_revision=self.navigation.e_field_revision,
                         )
                     bundle, affine_vtk, coord_offset, coord_offset_w = (
@@ -461,7 +463,9 @@ class Navigation(metaclass=Singleton):
                 self.r_stylus = np.array(state["r_stylus"])
 
     def CoilSelectionDone(self):
-        return len(self.coil_registrations) == self.n_coils
+        if getattr(self, "eeg_only", False):
+            return True
+        return self.n_coils > 0 and self.n_coils == len(self.coil_registrations)
 
     def SelectCoil(self, coil_name, coil_registration):
         if coil_registration is not None:  # Add the coil to selection
