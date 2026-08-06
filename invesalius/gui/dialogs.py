@@ -8494,7 +8494,7 @@ class EEGDigitizationDialog(wx.Dialog):
             -1,
             _("EEG Electrode Digitization"),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
-            size=(900, 650),
+            size=(1000, 650),
         )
         self.nav_hub = nav_hub
         self.eeg_montage = nav_hub.eeg_montage
@@ -8533,28 +8533,6 @@ class EEGDigitizationDialog(wx.Dialog):
     def _init_ui(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Top Bar: Template Selection
-        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        lbl_template = wx.StaticText(self, -1, _("EEG Template:"))
-        font = lbl_template.GetFont()
-        font.SetWeight(wx.FONTWEIGHT_BOLD)
-        lbl_template.SetFont(font)
-
-        self.template_choice = wx.Choice(
-            self, -1, choices=self.eeg_montage.get_available_templates()
-        )
-        if self.eeg_montage.template_name:
-            self.template_choice.SetStringSelection(self.eeg_montage.template_name)
-        elif self.template_choice.GetCount() > 0:
-            self.template_choice.SetSelection(0)
-
-        self.template_choice.Bind(wx.EVT_CHOICE, self.OnTemplateChanged)
-
-        top_sizer.Add(lbl_template, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        top_sizer.Add(self.template_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        main_sizer.Add(top_sizer, 0, wx.EXPAND | wx.ALL, 5)
-
         # Middle Split: VTK Left, Table Right
         split_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -8568,6 +8546,28 @@ class EEGDigitizationDialog(wx.Dialog):
         # Right Panel (Table and Controls)
         right_panel = wx.Panel(self)
         right_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Top Bar: Template Selection
+        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_template = wx.StaticText(right_panel, -1, _("EEG Template:"))
+        font = lbl_template.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        lbl_template.SetFont(font)
+
+        self.template_choice = wx.Choice(
+            right_panel, -1, choices=self.eeg_montage.get_available_templates()
+        )
+        if self.eeg_montage.template_name:
+            self.template_choice.SetStringSelection(self.eeg_montage.template_name)
+        elif self.template_choice.GetCount() > 0:
+            self.template_choice.SetSelection(0)
+
+        self.template_choice.Bind(wx.EVT_CHOICE, self.OnTemplateChanged)
+
+        top_sizer.Add(lbl_template, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        top_sizer.Add(self.template_choice, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        right_sizer.Add(top_sizer, 0, wx.EXPAND | wx.ALL, 0)
 
         top_btns_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -8597,19 +8597,23 @@ class EEGDigitizationDialog(wx.Dialog):
         bottom_right_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         lbl_export_format = wx.StaticText(right_panel, -1, _("Format:"))
-        bottom_right_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        bottom_right_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        self.choice_export_format = wx.Choice(
-            right_panel, -1, choices=["BIDS", "HPTS"], size=(120, 30)
-        )
+        self.choice_export_format = wx.Choice(right_panel, -1, choices=["BIDS", "HPTS"])
         self.choice_export_format.SetSelection(0)
-        bottom_right_sizer.Add(self.choice_export_format, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+        bottom_right_sizer.Add(self.choice_export_format, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        btn_export = wx.Button(right_panel, -1, _("Export"), size=(100, 30))
+        btn_export = wx.Button(right_panel, -1, _("Export"))
         btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
-        bottom_right_sizer.Add(btn_export, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+        bottom_right_sizer.Add(btn_export, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
         right_sizer.Add(bottom_right_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Bottom Bar: Show Electrodes
+        self.cb_show_electrodes = wx.CheckBox(right_panel, -1, _("Show Electrodes"))
+        self.cb_show_electrodes.SetValue(self.eeg_montage.show_electrodes)
+        self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
+        right_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_LEFT | wx.ALL, 5)
 
         right_panel.SetSizer(right_sizer)
 
@@ -8618,15 +8622,6 @@ class EEGDigitizationDialog(wx.Dialog):
 
         main_sizer.Add(split_sizer, 1, wx.EXPAND | wx.ALL, 5)
 
-        # Bottom Bar: Export and Close
-        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        self.cb_show_electrodes = wx.CheckBox(self, -1, _("Show Electrodes"))
-        self.cb_show_electrodes.SetValue(self.eeg_montage.show_electrodes)
-        self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
-        bottom_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.BOTTOM | wx.LEFT | wx.RIGHT, 5)
         self.SetSizer(main_sizer)
 
     def OnTemplateChanged(self, evt):
