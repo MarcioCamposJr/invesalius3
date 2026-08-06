@@ -2169,7 +2169,7 @@ class CalculateSurfacePropertiesProgressWindow:
         self.dlg = wx.ProgressDialog(title, message, parent=parent, style=style)
         self.dlg.Show()
 
-    def Update(self, msg: Optional[str] = None, value=None) -> None:
+    def Update(self, msg: str | None = None, value=None) -> None:
         if msg is None:
             self.dlg.Pulse()
         else:
@@ -7995,7 +7995,7 @@ class ProgressBarHandler(wx.ProgressDialog):
 class ProjectLoadProgressDialog:
     """Progress dialog for loading .inv3 project files with cancellation support."""
 
-    def __init__(self, parent: Optional[wx.Window] = None):
+    def __init__(self, parent: wx.Window | None = None):
         if parent is None:
             parent = wx.GetApp().GetTopWindow()
 
@@ -8480,3 +8480,694 @@ class GridConfigDialog(wx.Dialog):
             "points_per_ring": self.spin_points_per_ring.GetValue(),
             "spacing": self.spin_spacing.GetValue(),
         }
+
+
+class EEGDigitizationDialog(wx.Dialog):
+    """
+    Single-window dialog for EEG Electrode Digitization.
+    Embeds a VTK viewer and table to collect points and match them.
+    """
+
+    def __init__(self, parent, nav_hub):
+        super().__init__(
+            parent,
+            -1,
+            _("EEG Electrode Digitization"),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
+            size=(1000, 700),
+        )
+        self.nav_hub = nav_hub
+        self.eeg_montage = nav_hub.eeg_montage
+
+        self.current_coord = None
+        self.electrode_actors = {}
+
+        self.ren = None
+        self.interactor = None
+
+        Publisher.subscribe(self.OnUpdateCoord, "Set cross focal point")
+
+        self._init_ui()
+        self._init_vtk()
+        self.CenterOnScreen()
+
+        self.Bind(wx.EVT_CLOSE, self.OnCloseEvent)
+
+        # Load persisted EEG state from project session
+        self.eeg_montage.LoadState()
+        self._refresh_list()
+
+    def OnUpdateCoord(self, position):
+        self.current_coord = list(position[:3])
+
+    def CloseDialog(self):
+        try:
+            Publisher.unsubscribe(self.OnUpdateCoord, "Set cross focal point")
+        except Exception:
+            pass
+
+    def OnCloseEvent(self, evt):
+        self.CloseDialog()
+        evt.Skip()
+
+    def _init_ui(self):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Top Bar: Template Selection
+        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        lbl_template = wx.StaticText(self, -1, _("EEG Template:"))
+        font = lbl_template.GetFont()
+        font.SetWeight(wx.FONTWEIGHT_BOLD)
+        lbl_template.SetFont(font)
+
+        self.template_choice = wx.Choice(
+            self, -1, choices=self.eeg_montage.get_available_templates()
+        )
+        if self.eeg_montage.template_name:
+            self.template_choice.SetStringSelection(self.eeg_montage.template_name)
+        elif self.template_choice.GetCount() > 0:
+            self.template_choice.SetSelection(0)
+
+        self.template_choice.Bind(wx.EVT_CHOICE, self.OnTemplateChanged)
+
+        top_sizer.Add(lbl_template, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        top_sizer.Add(self.template_choice, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        main_sizer.Add(top_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # Middle Split: VTK Left, Table Right
+        split_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        # Left Panel (VTK)
+        vtk_panel = wx.Panel(self)
+        vtk_sizer = wx.BoxSizer(wx.VERTICAL)
+        self.interactor = wxVTKRenderWindowInteractor(vtk_panel, -1, size=(600, 500))
+        vtk_sizer.Add(self.interactor, 1, wx.EXPAND | wx.ALL, 0)
+        vtk_panel.SetSizer(vtk_sizer)
+
+        # Right Panel (Table and Controls)
+        right_panel = wx.Panel(self)
+        right_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        btn_capture = wx.Button(right_panel, -1, _("Capture Point (Probe)"))
+        btn_capture.Bind(wx.EVT_BUTTON, self.OnCaptureElectrode)
+        right_sizer.Add(btn_capture, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.results_list = wx.ListCtrl(right_panel, -1, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.results_list.InsertColumn(0, _("ID"), width=50)
+        self.results_list.InsertColumn(1, _("Matched Name"), width=100)
+        self.results_list.InsertColumn(2, _("Distance (mm)"), width=100)
+        self.results_list.InsertColumn(3, _("Confidence"), width=100)
+        self.results_list.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.OnRightClickItem)
+        self.results_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected)
+        right_sizer.Add(self.results_list, 1, wx.EXPAND | wx.ALL, 5)
+
+        btn_process = wx.Button(right_panel, -1, _("Process and Match Electrodes"))
+        btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
+        right_sizer.Add(btn_process, 0, wx.EXPAND | wx.ALL, 5)
+
+        btn_clear = wx.Button(right_panel, -1, _("Clear All Points"))
+        btn_clear.Bind(wx.EVT_BUTTON, self.OnClearAll)
+        right_sizer.Add(btn_clear, 0, wx.EXPAND | wx.ALL, 5)
+
+        right_panel.SetSizer(right_sizer)
+
+        split_sizer.Add(vtk_panel, 2, wx.EXPAND | wx.ALL, 5)
+        split_sizer.Add(right_panel, 1, wx.EXPAND | wx.ALL, 5)
+
+        main_sizer.Add(split_sizer, 1, wx.EXPAND | wx.ALL, 5)
+
+        # Bottom Bar: Export and Close
+        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.cb_show_electrodes = wx.CheckBox(self, -1, _("Show Electrodes"))
+        self.cb_show_electrodes.SetValue(self.eeg_montage.show_electrodes)
+        self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
+        bottom_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        bottom_sizer.AddStretchSpacer(1)
+
+        lbl_export_format = wx.StaticText(self, -1, _("Format:"))
+        bottom_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS", "HPTS"])
+        self.choice_export_format.SetSelection(0)
+        bottom_sizer.Add(self.choice_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        btn_export = wx.Button(self, -1, _("Export"))
+        btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
+        bottom_sizer.Add(btn_export, 0, wx.ALL, 5)
+
+        btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"))
+        bottom_sizer.Add(btn_close, 0, wx.ALL, 5)
+
+        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        self.SetSizer(main_sizer)
+
+    def OnTemplateChanged(self, evt):
+        template = self.template_choice.GetStringSelection()
+        if template:
+            self.eeg_montage.load_template(template)
+
+    def _init_vtk(self):
+        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
+
+        import invesalius.project as prj
+
+        self.interactor.Enable(1)
+        self.ren = vtkRenderer()
+        self.ren.SetBackground(0.0, 0.0, 0.0)
+        self.interactor.GetRenderWindow().AddRenderer(self.ren)
+
+        style = vtkInteractorStyleTrackballCamera()
+        self.interactor.SetInteractorStyle(style)
+
+        # Load head surface from project
+        proj = prj.Project()
+        if proj.surface_dict:
+            # Get the last surface or a combined surface
+            last_idx = max(proj.surface_dict.keys())
+            surface = proj.surface_dict[last_idx]
+            if surface and hasattr(surface, "polydata"):
+                self.polydata = surface.polydata
+
+                from vtkmodules.vtkCommonDataModel import vtkCellLocator
+                from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
+
+                self.surface_locator = vtkCellLocator()
+                self.surface_locator.SetDataSet(self.polydata)
+                self.surface_locator.BuildLocator()
+
+                self.surface_normals = self.polydata.GetCellData().GetNormals()
+                if not self.surface_normals:
+                    norm = vtkPolyDataNormals()
+                    norm.SetInputData(self.polydata)
+                    norm.ComputePointNormalsOn()
+                    norm.ComputeCellNormalsOn()
+                    norm.Update()
+                    self.polydata = norm.GetOutput()
+                    self.surface_normals = self.polydata.GetCellData().GetNormals()
+
+                if self.polydata:
+                    mapper = vtkPolyDataMapper()
+                    mapper.SetInputData(self.polydata)
+
+                    actor = vtkActor()
+                    actor.SetMapper(mapper)
+                    actor.GetProperty().SetOpacity(1.0)
+                    actor.GetProperty().SetColor(*surface.colour[:3])
+                    mapper.ScalarVisibilityOff()
+                    self.ren.AddActor(actor)
+
+        self.ren.ResetCamera()
+        self._refresh_list()
+
+    def _create_torus_actor(self, position, color):
+        import math
+
+        import numpy as np
+        import vtk
+        from vtkmodules.vtkCommonComputationalGeometry import vtkParametricTorus
+        from vtkmodules.vtkCommonTransforms import vtkTransform
+        from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
+        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
+
+        torus = vtkParametricTorus()
+        torus.SetRingRadius(3.0)
+        torus.SetCrossSectionRadius(0.8)
+
+        source = vtkParametricFunctionSource()
+        source.SetParametricFunction(torus)
+        source.Update()
+
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputConnection(source.GetOutputPort())
+
+        actor = vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(color)
+
+        if hasattr(self, "surface_locator") and self.surface_locator is not None:
+            closest_point = [0.0, 0.0, 0.0]
+            cell_id = vtk.reference(0)
+            sub_id = vtk.reference(0)
+            dist2 = vtk.reference(0.0)
+
+            self.surface_locator.FindClosestPoint(position, closest_point, cell_id, sub_id, dist2)
+
+            target_z = np.array(self.surface_normals.GetTuple(cell_id.get()))
+            if np.linalg.norm(target_z) > 1e-6:
+                target_z = target_z / np.linalg.norm(target_z)
+            else:
+                target_z = np.array([0, 0, 1])
+
+            # Ensure normal points outward from the center of the mesh
+            center = np.array(self.polydata.GetCenter())
+            vec_from_center = position - center
+            if np.dot(target_z, vec_from_center) < 0:
+                target_z = -target_z
+
+            source_z = np.array([0, 0, 1])
+            axis = np.cross(source_z, target_z)
+            axis_norm = np.linalg.norm(axis)
+
+            transform = vtkTransform()
+            transform.Translate(position)
+
+            if axis_norm > 1e-6:
+                axis = axis / axis_norm
+                angle = math.degrees(math.acos(np.dot(source_z, target_z)))
+                transform.RotateWXYZ(angle, axis[0], axis[1], axis[2])
+            elif np.dot(source_z, target_z) < 0:
+                transform.RotateWXYZ(180, 1, 0, 0)
+
+            actor.SetUserTransform(transform)
+            final_pos = position
+            final_norm = target_z
+        else:
+            actor.SetPosition(position)
+            final_pos = position
+            final_norm = np.array([0, 0, 1])
+
+        return actor, final_pos, final_norm
+
+    def _focus_camera(self, position, normal=None):
+        import numpy as np
+
+        cam = self.ren.GetActiveCamera()
+
+        target = np.array(position)
+        old_pos = np.array(cam.GetPosition())
+        old_center = np.array(cam.GetFocalPoint())
+
+        distance = np.linalg.norm(old_pos - old_center)
+        if distance < 50:
+            distance = 250.0
+
+        if normal is not None:
+            direction = np.array(normal)
+            if np.linalg.norm(direction) > 1e-6:
+                direction = direction / np.linalg.norm(direction)
+            else:
+                direction = np.array([0, 0, 1])
+        else:
+            direction = target - old_center
+            if np.linalg.norm(direction) > 1e-6:
+                direction = direction / np.linalg.norm(direction)
+            else:
+                direction = np.array([0, 0, 1])
+
+        new_pos = target + direction * distance
+
+        cam.SetFocalPoint(*target)
+        cam.SetPosition(new_pos[0], new_pos[1], new_pos[2])
+
+        if abs(direction[2]) > 0.99:
+            cam.SetViewUp(0, 1, 0)
+        else:
+            cam.SetViewUp(0, 0, 1)
+
+        self.ren.ResetCameraClippingRange()
+        self.interactor.Render()
+
+    def _refresh_list(self):
+        import numpy as np
+        from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D
+
+        # Clear existing actors
+        for actor in self.electrode_actors.values():
+            self.ren.RemoveActor(actor)
+        self.electrode_actors.clear()
+
+        # Clear list
+        self.results_list.DeleteAllItems()
+
+        # Re-add from point_cloud
+        has_matches = bool(self.eeg_montage.labeled_electrodes)
+
+        eeg_data = []
+
+        for i, coord in enumerate(self.eeg_montage.point_cloud):
+            name = f"E{i + 1}"
+
+            color = (0.5, 0.5, 0.5)
+            text_color = wx.Colour(100, 100, 100)
+
+            label = "-"
+            distance = "-"
+            confidence = "-"
+
+            if has_matches and i < len(self.eeg_montage.labeled_electrodes):
+                res = self.eeg_montage.labeled_electrodes[i]
+                label = res.label
+                name = label
+                distance = f"{res.distance_mm:.2f}" if res.distance_mm is not None else "N/A"
+                confidence = res.confidence.value.capitalize()
+
+                if res.confidence.value == "high":
+                    color = (0.0, 1.0, 0.0)
+                    text_color = wx.Colour(0, 150, 0)
+                elif res.confidence.value == "medium":
+                    color = (1.0, 1.0, 0.0)
+                    text_color = wx.Colour(204, 204, 0)
+                elif res.confidence.value == "low":
+                    color = (1.0, 0.0, 0.0)
+                    text_color = wx.Colour(200, 0, 0)
+
+            # Convert from InVesalius space to VTK space (negate Y) for rendering
+            vtk_coord = list(coord)
+            vtk_coord[1] = -vtk_coord[1]
+            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, color)
+            self.ren.AddActor(actor)
+            self.electrode_actors[name] = actor
+
+            # Add text label (Billboard)
+            text_actor = vtkBillboardTextActor3D()
+            text_actor.SetInput(name)
+
+            # Configure Text Property for better visibility
+            text_prop = text_actor.GetTextProperty()
+            text_prop.SetFontSize(28)  # Increase size
+            text_prop.SetColor(*color)
+            text_prop.SetBold(True)
+            text_prop.SetShadow(True)
+            text_prop.SetShadowOffset(2, -2)
+
+            # Add a strong gray border/frame
+            text_prop.SetFrame(True)
+            text_prop.SetFrameColor(0.2, 0.2, 0.2)
+            text_prop.SetFrameWidth(2)
+            text_prop.SetBackgroundColor(0.3, 0.3, 0.3)
+            text_prop.SetBackgroundOpacity(0.85)
+
+            # Offset text slightly outwards along the normal vector
+            offset_pos = np.array(final_coord) + np.array(target_z) * 6.0
+            text_actor.SetPosition(offset_pos)
+
+            self.ren.AddActor(text_actor)
+            self.electrode_actors[f"{name}_text"] = text_actor
+
+            eeg_data.append(
+                {
+                    "name": name,
+                    "position": final_coord,
+                    "normal": target_z.tolist() if hasattr(target_z, "tolist") else list(target_z),
+                    "color": color,
+                }
+            )
+
+            idx = self.results_list.InsertItem(self.results_list.GetItemCount(), name)
+            self.results_list.SetItem(idx, 1, label)
+            self.results_list.SetItem(idx, 2, distance)
+            self.results_list.SetItem(idx, 3, confidence)
+
+            if has_matches:
+                self.results_list.SetItemTextColour(idx, text_color)
+
+        if hasattr(self, "interactor"):
+            self.interactor.Render()
+
+        self.electrode_data = eeg_data
+        Publisher.sendMessage(
+            "Update EEG electrodes", electrodes_data=eeg_data, show=self.eeg_montage.show_electrodes
+        )
+
+    def OnRightClickItem(self, evt):
+        self.selected_item = evt.GetIndex()
+        menu = wx.Menu()
+
+        if self.eeg_montage.labeled_electrodes and self.selected_item < len(
+            self.eeg_montage.labeled_electrodes
+        ):
+            change_lbl_item = menu.Append(wx.ID_ANY, _("Change Label..."))
+            self.Bind(wx.EVT_MENU, self.OnChangeLabel, change_lbl_item)
+            menu.AppendSeparator()
+
+        item = menu.Append(wx.ID_ANY, _("Delete Point"))
+        self.Bind(wx.EVT_MENU, self.OnDeletePoint, item)
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+    def OnItemSelected(self, evt):
+        idx = evt.GetIndex()
+        if not hasattr(self, "electrode_data") or idx >= len(self.electrode_data):
+            return
+
+        data = self.electrode_data[idx]
+
+        # Reset all colors and highlight selected
+        for i, edata in enumerate(self.electrode_data):
+            actor = self.electrode_actors.get(edata["name"])
+            if actor:
+                if i == idx:
+                    actor.GetProperty().SetColor(0.0, 0.5, 1.0)  # Blue highlight
+                else:
+                    actor.GetProperty().SetColor(edata["color"])
+
+        # Focus camera
+        self._focus_camera(data["position"], normal=data["normal"])
+
+        if hasattr(self, "interactor"):
+            self.interactor.Render()
+
+    def OnChangeLabel(self, evt):
+        if not self.eeg_montage.labeled_electrodes:
+            return
+
+        idx = getattr(self, "selected_item", -1)
+        if idx < 0 or idx >= len(self.eeg_montage.labeled_electrodes):
+            return
+
+        current_elec = self.eeg_montage.labeled_electrodes[idx]
+        available_labels = getattr(self.eeg_montage, "template_labels", [])
+        if not available_labels:
+            return
+
+        dlg = wx.SingleChoiceDialog(
+            self,
+            _("Select a new label for this electrode:"),
+            _("Change Label"),
+            available_labels,
+        )
+        if current_elec.label in available_labels:
+            dlg.SetSelection(available_labels.index(current_elec.label))
+
+        if dlg.ShowModal() == wx.ID_OK:
+            new_label = dlg.GetStringSelection()
+            current_elec.label = new_label
+            current_elec.manually_corrected = True
+            self._refresh_list()
+        dlg.Destroy()
+
+    def OnDeletePoint(self, evt):
+        if hasattr(self, "selected_item") and self.selected_item >= 0:
+            idx = self.selected_item
+            if idx < len(self.eeg_montage.point_cloud):
+                self.eeg_montage.point_cloud.pop(idx)
+                if self.eeg_montage.labeled_electrodes and idx < len(
+                    self.eeg_montage.labeled_electrodes
+                ):
+                    self.eeg_montage.labeled_electrodes.pop(idx)
+            self._refresh_list()
+
+    def OnClearAll(self, evt):
+        self.eeg_montage.point_cloud.clear()
+        self.eeg_montage.labeled_electrodes.clear()
+        self._refresh_list()
+
+    def OnCaptureElectrode(self, evt=None):
+        if self.current_coord is not None:
+            # Check visibility before capturing
+            if (
+                hasattr(self, "nav_hub")
+                and hasattr(self.nav_hub, "tracker")
+                and self.nav_hub.tracker.IsTrackerInitialized()
+            ):
+                import invesalius.constants as const
+
+                ref_mode_id = self.nav_hub.navigation.GetReferenceMode()
+
+                # Fetch fresh coordinates and visibility flags
+                marker_visibilities, dummy_coord, dummy_raw = (
+                    self.nav_hub.tracker.GetTrackerCoordinates(ref_mode_id=ref_mode_id, n_samples=1)
+                )
+
+                if not marker_visibilities[0]:
+                    wx.MessageBox(
+                        _("Probe not visible to tracker!"), _("InVesalius 3"), wx.ICON_WARNING
+                    )
+                    return
+
+                if ref_mode_id == const.DYNAMIC_REF and not marker_visibilities[1]:
+                    wx.MessageBox(
+                        _("Head reference not visible to tracker!"),
+                        _("InVesalius 3"),
+                        wx.ICON_WARNING,
+                    )
+                    return
+
+            if self.eeg_montage.labeled_electrodes:
+                self.eeg_montage.labeled_electrodes.clear()
+
+            import numpy as np
+
+            projected_coord = list(self.current_coord)
+
+            try:
+                if hasattr(self, "nav_hub") and hasattr(self.nav_hub, "markers"):
+                    surf_geom = self.nav_hub.markers.transformator.surface_geometry
+
+                    # Convert to VTK space for the surface geometry locator
+                    vtk_coord = list(self.current_coord)
+                    vtk_coord[1] = -vtk_coord[1]
+
+                    closest_point, closest_normal = surf_geom.GetClosestPointOnSurface(
+                        "scalp", vtk_coord
+                    )
+
+                    if closest_point is not None:
+                        # Convert back to InVesalius space
+                        projected_coord = list(closest_point)
+                        projected_coord[1] = -projected_coord[1]
+
+                        dist_mm = np.linalg.norm(
+                            np.array(self.current_coord) - np.array(projected_coord)
+                        )
+                        if dist_mm > 3.0:
+                            msg = (
+                                _(
+                                    "The projection to the scalp surface moved the electrode by %.1f mm "
+                                    "(above the 3 mm limit). This may indicate an inaccuracy during the click.\n\n"
+                                    "Do you want to keep this electrode anyway?"
+                                )
+                                % dist_mm
+                            )
+
+                            dlg = wx.MessageDialog(
+                                self,
+                                msg,
+                                _("Displacement Warning"),
+                                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+                            )
+                            result = dlg.ShowModal()
+                            dlg.Destroy()
+
+                            if result != wx.ID_YES:
+                                return  # Abort point capture
+
+            except Exception as e:
+                print("Error projecting electrode:", e)
+
+            self.eeg_montage.add_point(projected_coord)
+            coord = self.eeg_montage.point_cloud[-1]
+
+            # Convert from InVesalius space to VTK space (negate Y) for rendering
+            vtk_coord = list(coord)
+            vtk_coord[1] = -vtk_coord[1]
+            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, (0.5, 0.5, 0.5))
+
+            self._refresh_list()
+            self._focus_camera(final_coord, normal=target_z)
+        else:
+            wx.MessageBox(
+                _("No spatial tracker coordinate received yet. Make sure navigation is active."),
+                _("Error"),
+                wx.ICON_ERROR,
+            )
+
+    def OnProcessElectrodes(self, evt):
+        # 1. Fetch image fiducials and register
+        fiducials = None
+        if hasattr(self.nav_hub.image, "fiducials"):
+            fiducials = self.nav_hub.image.fiducials
+
+        import numpy as np
+
+        if fiducials is None or np.isnan(fiducials[0:3]).any():
+            wx.MessageBox(
+                _(
+                    "Please register image fiducials in Navigation (Left Ear, Right Ear, Nasion) first!"
+                ),
+                _("Error"),
+                wx.ICON_ERROR,
+            )
+            return
+
+        try:
+            # Map navigation fiducials to MNE expected:
+            # InVesalius: 0=LE, 1=RE, 2=Nasion
+            self.eeg_montage.set_fiducial("lpa", fiducials[0])
+            self.eeg_montage.set_fiducial("rpa", fiducials[1])
+            self.eeg_montage.set_fiducial("nasion", fiducials[2])
+
+            # Make sure template is loaded
+            template = self.template_choice.GetStringSelection()
+            if template:
+                self.eeg_montage.load_template(template)
+
+            progress = wx.ProgressDialog(
+                _("Processing Electrodes"),
+                _("Initializing..."),
+                maximum=4,
+                parent=self,
+                style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE,
+            )
+
+            def progress_callback(step: int, msg: str):
+                progress.Update(step, msg)
+                wx.Yield()
+
+            mean_err, results = self.eeg_montage.run_icp_matching(
+                progress_callback=progress_callback
+            )
+
+            progress.Update(4, _("Done!"))
+            progress.Destroy()
+
+            self.eeg_montage.SaveState()
+            self._refresh_list()
+
+            self.interactor.Render()
+            wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
+
+        except Exception as e:
+            wx.MessageBox(_("Error during matching: ") + str(e), _("Error"), wx.ICON_ERROR)
+
+    def OnToggleShowElectrodes(self, evt):
+        show = self.cb_show_electrodes.GetValue()
+        self.eeg_montage.show_electrodes = show
+        self.eeg_montage.SaveState()
+        Publisher.sendMessage("Toggle EEG electrodes visibility", show=show)
+
+    def OnExport(self, evt):
+        fmt = self.choice_export_format.GetStringSelection()
+        if fmt == "BIDS":
+            self.OnExportBIDS(evt)
+        elif fmt == "HPTS":
+            self.OnExportHPTS(evt)
+
+    def OnExportBIDS(self, evt):
+        dlg = wx.DirDialog(
+            self,
+            _("Select BIDS Export Directory"),
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self.eeg_montage.export_bids(path)
+            wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
+        dlg.Destroy()
+
+    def OnExportHPTS(self, evt):
+        dlg = wx.FileDialog(
+            self,
+            _("Save HPTS File"),
+            wildcard="HPTS files (*.hpts)|*.hpts",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            path = dlg.GetPath()
+            self.eeg_montage.export_hpts(path)
+            wx.MessageBox(_("Exported successfully!"), _("Success"), wx.ICON_INFORMATION)
+        dlg.Destroy()
