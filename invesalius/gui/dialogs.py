@@ -8655,8 +8655,11 @@ class EEGDigitizationDialog(wx.Dialog):
                 text_color.Blue() / 255.0,
             )
 
+            # Note: The main viewer doesn't automatically project onto the surface,
+            # but currently we just use the coordinate exactly.
+            # InVesalius uses positive Y, VTK often uses negative Y, but main viewer uses InVesalius coords.
             final_coord = list(coord)
-            target_z = [0, 0, 1]
+            target_z = [0, 0, 1]  # We just use Z-axis as default normal for torus
             try:
                 if hasattr(self, "nav_hub") and hasattr(self.nav_hub, "markers"):
                     surf_geom = self.nav_hub.markers.transformator.surface_geometry

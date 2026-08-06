@@ -113,7 +113,6 @@ class EEGVisualizer:
             offset_pos = np.array(position) + np.array(target_z) * 6.0
             text_actor.SetPosition(offset_pos)
             text_actor.SetVisibility(show)
-
             self.ren.AddActor(text_actor)
             self.actors[f"{name}_text"] = text_actor
 
