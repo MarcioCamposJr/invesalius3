@@ -8494,7 +8494,7 @@ class EEGDigitizationDialog(wx.Dialog):
             -1,
             _("EEG Electrode Digitization"),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
-            size=(1000, 650),
+            size=(400, 650),
         )
         self.nav_hub = nav_hub
         self.eeg_montage = nav_hub.eeg_montage
@@ -8502,13 +8502,9 @@ class EEGDigitizationDialog(wx.Dialog):
         self.current_coord = None
         self.electrode_actors = {}
 
-        self.ren = None
-        self.interactor = None
-
         Publisher.subscribe(self.OnUpdateCoord, "Set cross focal point")
 
         self._init_ui()
-        self._init_vtk()
         self.CenterOnScreen()
 
         self.Bind(wx.EVT_CLOSE, self.OnCloseEvent)
@@ -8532,16 +8528,6 @@ class EEGDigitizationDialog(wx.Dialog):
 
     def _init_ui(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
-
-        # Middle Split: VTK Left, Table Right
-        split_sizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        # Left Panel (VTK)
-        vtk_panel = wx.Panel(self)
-        vtk_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.interactor = wxVTKRenderWindowInteractor(vtk_panel, -1, size=(600, 500))
-        vtk_sizer.Add(self.interactor, 1, wx.EXPAND | wx.ALL, 0)
-        vtk_panel.SetSizer(vtk_sizer)
 
         # Right Panel (Table and Controls)
         right_panel = wx.Panel(self)
@@ -8617,10 +8603,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
         right_panel.SetSizer(right_sizer)
 
-        split_sizer.Add(vtk_panel, 1, wx.EXPAND | wx.ALL, 5)
-        split_sizer.Add(right_panel, 1, wx.EXPAND | wx.ALL, 5)
-
-        main_sizer.Add(split_sizer, 1, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(right_panel, 1, wx.EXPAND | wx.ALL, 5)
 
         self.SetSizer(main_sizer)
 
@@ -8629,177 +8612,7 @@ class EEGDigitizationDialog(wx.Dialog):
         if template:
             self.eeg_montage.load_template(template)
 
-    def _init_vtk(self):
-        from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkRenderer
-
-        import invesalius.project as prj
-
-        self.interactor.Enable(1)
-        self.ren = vtkRenderer()
-        self.ren.SetBackground(0.0, 0.0, 0.0)
-        self.interactor.GetRenderWindow().AddRenderer(self.ren)
-
-        style = vtkInteractorStyleTrackballCamera()
-        self.interactor.SetInteractorStyle(style)
-
-        # Load head surface from project
-        proj = prj.Project()
-        if proj.surface_dict:
-            # Get the last surface or a combined surface
-            last_idx = max(proj.surface_dict.keys())
-            surface = proj.surface_dict[last_idx]
-            if surface and hasattr(surface, "polydata"):
-                self.polydata = surface.polydata
-
-                from vtkmodules.vtkCommonDataModel import vtkCellLocator
-                from vtkmodules.vtkFiltersCore import vtkPolyDataNormals
-
-                self.surface_locator = vtkCellLocator()
-                self.surface_locator.SetDataSet(self.polydata)
-                self.surface_locator.BuildLocator()
-
-                self.surface_normals = self.polydata.GetCellData().GetNormals()
-                if not self.surface_normals:
-                    norm = vtkPolyDataNormals()
-                    norm.SetInputData(self.polydata)
-                    norm.ComputePointNormalsOn()
-                    norm.ComputeCellNormalsOn()
-                    norm.Update()
-                    self.polydata = norm.GetOutput()
-                    self.surface_normals = self.polydata.GetCellData().GetNormals()
-
-                if self.polydata:
-                    mapper = vtkPolyDataMapper()
-                    mapper.SetInputData(self.polydata)
-
-                    actor = vtkActor()
-                    actor.SetMapper(mapper)
-                    actor.GetProperty().SetOpacity(1.0)
-                    actor.GetProperty().SetColor(*surface.colour[:3])
-                    mapper.ScalarVisibilityOff()
-                    self.ren.AddActor(actor)
-
-        self.ren.ResetCamera()
-        self._refresh_list()
-
-    def _create_torus_actor(self, position, color):
-        import math
-
-        import numpy as np
-        import vtk
-        from vtkmodules.vtkCommonComputationalGeometry import vtkParametricTorus
-        from vtkmodules.vtkCommonTransforms import vtkTransform
-        from vtkmodules.vtkFiltersSources import vtkParametricFunctionSource
-        from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
-
-        torus = vtkParametricTorus()
-        torus.SetRingRadius(3.0)
-        torus.SetCrossSectionRadius(0.8)
-
-        source = vtkParametricFunctionSource()
-        source.SetParametricFunction(torus)
-        source.Update()
-
-        mapper = vtkPolyDataMapper()
-        mapper.SetInputConnection(source.GetOutputPort())
-
-        actor = vtkActor()
-        actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(color)
-
-        if hasattr(self, "surface_locator") and self.surface_locator is not None:
-            closest_point = [0.0, 0.0, 0.0]
-            cell_id = vtk.reference(0)
-            sub_id = vtk.reference(0)
-            dist2 = vtk.reference(0.0)
-
-            self.surface_locator.FindClosestPoint(position, closest_point, cell_id, sub_id, dist2)
-
-            target_z = np.array(self.surface_normals.GetTuple(cell_id.get()))
-            if np.linalg.norm(target_z) > 1e-6:
-                target_z = target_z / np.linalg.norm(target_z)
-            else:
-                target_z = np.array([0, 0, 1])
-
-            # Ensure normal points outward from the center of the mesh
-            center = np.array(self.polydata.GetCenter())
-            vec_from_center = position - center
-            if np.dot(target_z, vec_from_center) < 0:
-                target_z = -target_z
-
-            source_z = np.array([0, 0, 1])
-            axis = np.cross(source_z, target_z)
-            axis_norm = np.linalg.norm(axis)
-
-            transform = vtkTransform()
-            transform.Translate(position)
-
-            if axis_norm > 1e-6:
-                axis = axis / axis_norm
-                angle = math.degrees(math.acos(np.dot(source_z, target_z)))
-                transform.RotateWXYZ(angle, axis[0], axis[1], axis[2])
-            elif np.dot(source_z, target_z) < 0:
-                transform.RotateWXYZ(180, 1, 0, 0)
-
-            actor.SetUserTransform(transform)
-            final_pos = position
-            final_norm = target_z
-        else:
-            actor.SetPosition(position)
-            final_pos = position
-            final_norm = np.array([0, 0, 1])
-
-        return actor, final_pos, final_norm
-
-    def _focus_camera(self, position, normal=None):
-        import numpy as np
-
-        cam = self.ren.GetActiveCamera()
-
-        target = np.array(position)
-        old_pos = np.array(cam.GetPosition())
-        old_center = np.array(cam.GetFocalPoint())
-
-        distance = np.linalg.norm(old_pos - old_center)
-        if distance < 50:
-            distance = 250.0
-
-        if normal is not None:
-            direction = np.array(normal)
-            if np.linalg.norm(direction) > 1e-6:
-                direction = direction / np.linalg.norm(direction)
-            else:
-                direction = np.array([0, 0, 1])
-        else:
-            direction = target - old_center
-            if np.linalg.norm(direction) > 1e-6:
-                direction = direction / np.linalg.norm(direction)
-            else:
-                direction = np.array([0, 0, 1])
-
-        new_pos = target + direction * distance
-
-        cam.SetFocalPoint(*target)
-        cam.SetPosition(new_pos[0], new_pos[1], new_pos[2])
-
-        if abs(direction[2]) > 0.99:
-            cam.SetViewUp(0, 1, 0)
-        else:
-            cam.SetViewUp(0, 0, 1)
-
-        self.ren.ResetCameraClippingRange()
-        self.interactor.Render()
-
     def _refresh_list(self):
-        import numpy as np
-        from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D
-
-        # Clear existing actors
-        for actor in self.electrode_actors.values():
-            self.ren.RemoveActor(actor)
-        self.electrode_actors.clear()
-
         # Clear list
         self.results_list.DeleteAllItems()
 
@@ -8835,45 +8648,34 @@ class EEGDigitizationDialog(wx.Dialog):
                     color = (1.0, 0.0, 0.0)
                     text_color = wx.Colour(200, 0, 0)
 
-            # Convert from InVesalius space to VTK space (negate Y) for rendering
-            vtk_coord = list(coord)
-            vtk_coord[1] = -vtk_coord[1]
-            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, color)
-            self.ren.AddActor(actor)
-            self.electrode_actors[name] = actor
+            # Convert to RGB tuple for text_color
+            text_color_tuple = (
+                text_color.Red() / 255.0,
+                text_color.Green() / 255.0,
+                text_color.Blue() / 255.0,
+            )
 
-            # Add text label (Billboard)
-            text_actor = vtkBillboardTextActor3D()
-            text_actor.SetInput(name)
-
-            # Configure Text Property for better visibility
-            text_prop = text_actor.GetTextProperty()
-            text_prop.SetFontSize(28)  # Increase size
-            text_prop.SetColor(*color)
-            text_prop.SetBold(True)
-            text_prop.SetShadow(True)
-            text_prop.SetShadowOffset(2, -2)
-
-            # Add a strong gray border/frame
-            text_prop.SetFrame(True)
-            text_prop.SetFrameColor(0.2, 0.2, 0.2)
-            text_prop.SetFrameWidth(2)
-            text_prop.SetBackgroundColor(0.3, 0.3, 0.3)
-            text_prop.SetBackgroundOpacity(0.85)
-
-            # Offset text slightly outwards along the normal vector
-            offset_pos = np.array(final_coord) + np.array(target_z) * 6.0
-            text_actor.SetPosition(offset_pos)
-
-            self.ren.AddActor(text_actor)
-            self.electrode_actors[f"{name}_text"] = text_actor
+            final_coord = list(coord)
+            target_z = [0, 0, 1]
+            try:
+                if hasattr(self, "nav_hub") and hasattr(self.nav_hub, "markers"):
+                    surf_geom = self.nav_hub.markers.transformator.surface_geometry
+                    vtk_coord = list(coord)
+                    vtk_coord[1] = -vtk_coord[1]
+                    closest_point, normal = surf_geom.GetClosestPointOnSurface("scalp", vtk_coord)
+                    if normal is not None:
+                        target_z = list(normal)
+                        target_z[1] = -target_z[1]
+            except Exception:
+                pass
 
             eeg_data.append(
                 {
                     "name": name,
                     "position": final_coord,
-                    "normal": target_z.tolist() if hasattr(target_z, "tolist") else list(target_z),
+                    "normal": target_z,
                     "color": color,
+                    "text_color": text_color_tuple,
                 }
             )
 
@@ -8884,9 +8686,6 @@ class EEGDigitizationDialog(wx.Dialog):
 
             if has_matches:
                 self.results_list.SetItemTextColour(idx, text_color)
-
-        if hasattr(self, "interactor"):
-            self.interactor.Render()
 
         self.electrode_data = eeg_data
         Publisher.sendMessage(
@@ -8915,21 +8714,21 @@ class EEGDigitizationDialog(wx.Dialog):
             return
 
         data = self.electrode_data[idx]
+        name = data["name"]
 
-        # Reset all colors and highlight selected
-        for i, edata in enumerate(self.electrode_data):
-            actor = self.electrode_actors.get(edata["name"])
-            if actor:
-                if i == idx:
-                    actor.GetProperty().SetColor(0.0, 0.5, 1.0)  # Blue highlight
-                else:
-                    actor.GetProperty().SetColor(edata["color"])
+        # Send message to update highlight in main viewer
+        Publisher.sendMessage(
+            "Update EEG electrodes",
+            electrodes_data=self.electrode_data,
+            show=self.eeg_montage.show_electrodes,
+            highlight_name=name,
+        )
 
-        # Focus camera
-        self._focus_camera(data["position"], normal=data["normal"])
-
-        if hasattr(self, "interactor"):
-            self.interactor.Render()
+        # Move cross to electrode position to focus camera in main viewer
+        pos = data["position"]
+        Publisher.sendMessage("Update cross position", position=pos)
+        Publisher.sendMessage("Set cross focal point", position=pos)
+        Publisher.sendMessage("Focus volume camera", position=pos)
 
     def OnChangeLabel(self, evt):
         if not self.eeg_montage.labeled_electrodes:
@@ -9062,13 +8861,14 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.add_point(projected_coord)
             coord = self.eeg_montage.point_cloud[-1]
 
-            # Convert from InVesalius space to VTK space (negate Y) for rendering
-            vtk_coord = list(coord)
-            vtk_coord[1] = -vtk_coord[1]
-            actor, final_coord, target_z = self._create_torus_actor(vtk_coord, (0.5, 0.5, 0.5))
-
             self._refresh_list()
-            self._focus_camera(final_coord, normal=target_z)
+            Publisher.sendMessage("Update cross position", position=coord)
+            Publisher.sendMessage("Focus volume camera", position=coord)
+
+            last_index = len(self.eeg_montage.point_cloud) - 1
+            if last_index >= 0:
+                self.results_list.Select(last_index)
+                self.results_list.EnsureVisible(last_index)
         else:
             wx.MessageBox(
                 _("No spatial tracker coordinate received yet. Make sure navigation is active."),
@@ -9128,7 +8928,6 @@ class EEGDigitizationDialog(wx.Dialog):
             self.eeg_montage.SaveState()
             self._refresh_list()
 
-            self.interactor.Render()
             wx.MessageBox(_("Matching complete!"), _("Success"), wx.ICON_INFORMATION)
 
         except Exception as e:

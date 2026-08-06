@@ -7,107 +7,116 @@
 # --------------------------------------------------------------------------
 
 """
-VTK actors for EEG electrode visualization.
-Used in the EEG Digitization wizard.
+VTK actors and visualizer for EEG electrode visualization.
+Delegates the 3D rendering of electrodes to the main viewer.
 """
 
-from typing import List, Tuple
+import math
 
 import numpy as np
-from vtkmodules.vtkCommonCore import vtkPoints
-from vtkmodules.vtkCommonDataModel import vtkPolyData
-from vtkmodules.vtkFiltersSources import vtkSphereSource
-from vtkmodules.vtkRenderingCore import (
-    vtkActor,
-    vtkFollower,
-    vtkPolyDataMapper,
-    vtkProperty,
-    vtkRenderer,
-)
-from vtkmodules.vtkRenderingFreeType import vtkVectorText
-
-from invesalius.navigation.eeg_montage import ConfidenceLevel, LabeledElectrode
+import vtk
+from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkRenderer
 
 
-def confidence_to_color(confidence: ConfidenceLevel) -> Tuple[float, float, float]:
-    """Map ConfidenceLevel to RGB color."""
-    if confidence == ConfidenceLevel.HIGH:
-        return (0.0, 0.8, 0.0)  # Green
-    elif confidence == ConfidenceLevel.MEDIUM:
-        return (1.0, 0.8, 0.0)  # Yellow
-    else:
-        return (1.0, 0.0, 0.0)  # Red
+class EEGVisualizer:
+    def __init__(self, renderer: vtkRenderer):
+        self.ren = renderer
+        self.actors = {}
 
+    def UpdateElectrodes(self, electrodes_data, show=True, highlight_name=None):
+        # Clear existing
+        for actor in self.actors.values():
+            self.ren.RemoveActor(actor)
+        self.actors.clear()
 
-def create_electrode_sphere(
-    position: np.ndarray, radius: float, color: Tuple[float, float, float]
-) -> vtkActor:
-    """Create a spherical vtkActor for an electrode."""
-    sphere = vtkSphereSource()
-    sphere.SetRadius(radius)
-    sphere.SetCenter(position[0], position[1], position[2])
+        if not electrodes_data:
+            return
 
-    mapper = vtkPolyDataMapper()
-    mapper.SetInputConnection(sphere.GetOutputPort())
+        for i, elec in enumerate(electrodes_data):
+            name = elec.get("name", f"E{i}")
+            position = elec.get("position", [0, 0, 0])
+            normal = elec.get("normal", [0, 0, 1])
+            color = elec.get("color", (0.5, 0.5, 0.5))
+            text_color = elec.get("text_color", (1.0, 1.0, 1.0))
 
-    prop = vtkProperty()
-    prop.SetColor(*color)
+            # Create torus
+            source = vtk.vtkParametricTorus()
+            source.SetRingRadius(3.0)
+            source.SetCrossSectionRadius(0.8)
 
-    actor = vtkActor()
-    actor.SetMapper(mapper)
-    actor.SetProperty(prop)
+            source_fn = vtk.vtkParametricFunctionSource()
+            source_fn.SetParametricFunction(source)
+            source_fn.SetUResolution(40)
+            source_fn.SetVResolution(40)
+            source_fn.Update()
 
-    return actor
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(source_fn.GetOutputPort())
 
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetOpacity(0.8)
 
-def create_label_follower(
-    text: str, position: np.ndarray, camera, color: Tuple[float, float, float] = (1.0, 1.0, 1.0)
-) -> vtkFollower:
-    """Create a vtkFollower with text that follows the camera."""
-    vector_text = vtkVectorText()
-    vector_text.SetText(text)
-    vector_text.Update()
+            source_z = np.array([0, 0, 1])
+            target_z = np.array(normal)
+            if np.linalg.norm(target_z) > 1e-6:
+                target_z = target_z / np.linalg.norm(target_z)
+            else:
+                target_z = np.array([0, 0, 1])
 
-    mapper = vtkPolyDataMapper()
-    mapper.SetInputConnection(vector_text.GetOutputPort())
+            # Ensure normal points outward (approximate center at origin)
+            if np.dot(target_z, np.array(position)) < 0:
+                target_z = -target_z
 
-    follower = vtkFollower()
-    follower.SetMapper(mapper)
-    follower.SetScale(2.5, 2.5, 2.5)
-    # Offset slightly above the sphere
-    follower.SetPosition(position[0], position[1], position[2] + 4.0)
-    follower.GetProperty().SetColor(*color)
-    follower.SetCamera(camera)
+            source_z = np.array([0, 0, 1])
+            axis = np.cross(source_z, target_z)
+            axis_norm = np.linalg.norm(axis)
 
-    return follower
+            transform = vtk.vtkTransform()
+            transform.Translate(position)
 
+            if axis_norm > 1e-6:
+                axis = axis / axis_norm
+                angle = math.degrees(math.acos(np.clip(np.dot(source_z, target_z), -1.0, 1.0)))
+                transform.RotateWXYZ(angle, axis[0], axis[1], axis[2])
+            elif np.dot(source_z, target_z) < 0:
+                transform.RotateWXYZ(180, 1, 0, 0)
 
-def update_electrode_actors(
-    renderer: vtkRenderer, labeled_electrodes: List[LabeledElectrode], invert_y: bool = True
-) -> List[vtkActor]:
-    """
-    Generate the visual actors for a list of labeled electrodes.
-    Returns the list of generated actors to be added to the renderer.
-    """
-    actors = []
+            actor.SetUserTransform(transform)
+            actor.SetVisibility(show)
 
-    # Needs camera for followers
-    camera = renderer.GetActiveCamera()
+            if highlight_name and name == highlight_name:
+                actor.GetProperty().SetColor(0.0, 0.5, 1.0)
+            else:
+                actor.GetProperty().SetColor(*color)
 
-    for elec in labeled_electrodes:
-        # Display coordinate logic from ICP dialog: x, -y, z
-        pos = list(elec.position_inv)
-        if invert_y:
-            pos[1] = -pos[1]
+            self.ren.AddActor(actor)
+            self.actors[name] = actor
 
-        color = confidence_to_color(elec.confidence)
+            # Create text label (Billboard)
+            text_actor = vtkBillboardTextActor3D()
+            text_actor.SetInput(name)
 
-        # Create sphere
-        sphere_actor = create_electrode_sphere(pos, radius=3.0, color=color)
-        actors.append(sphere_actor)
+            text_prop = text_actor.GetTextProperty()
+            text_prop.SetFontSize(28)
+            text_prop.SetColor(*text_color)
+            text_prop.SetBold(True)
+            text_prop.SetShadow(True)
+            text_prop.SetShadowOffset(2, -2)
 
-        # Create label
-        label_actor = create_label_follower(elec.label, pos, camera, color=(1.0, 1.0, 1.0))
-        actors.append(label_actor)
+            text_prop.SetFrame(True)
+            text_prop.SetFrameColor(0.2, 0.2, 0.2)
+            text_prop.SetFrameWidth(2)
+            text_prop.SetBackgroundColor(0.3, 0.3, 0.3)
+            text_prop.SetBackgroundOpacity(0.85)
 
-    return actors
+            offset_pos = np.array(position) + np.array(target_z) * 6.0
+            text_actor.SetPosition(offset_pos)
+            text_actor.SetVisibility(show)
+
+            self.ren.AddActor(text_actor)
+            self.actors[f"{name}_text"] = text_actor
+
+    def SetVisibility(self, show):
+        for actor in self.actors.values():
+            actor.SetVisibility(show)

@@ -100,6 +100,7 @@ from invesalius.data.actor_factory import ActorFactory
 from invesalius.data.markers.surface_geometry import SurfaceGeometry
 from invesalius.data.ruler_volume import GenericLeftRulerVolume
 from invesalius.data.visualization.coil_visualizer import CoilVisualizer
+from invesalius.data.visualization.eeg_vtk_actors import EEGVisualizer
 from invesalius.data.visualization.marker_visualizer import MarkerVisualizer
 from invesalius.data.visualization.probe_visualizer import ProbeVisualizer
 from invesalius.data.visualization.robot_force_visualizer import RobotForceVisualizer
@@ -374,7 +375,7 @@ class Viewer(wx.Panel):
         # SSAO state tracking
         self.ssao_enabled = False
         self.ssao_pass = None
-        self.eeg_actors = {}
+        self.eeg_visualizer = EEGVisualizer(renderer=self.ren)
         self.ssao_before_measurement = False  # Track SSAO state before entering measurement mode
 
         # self.renderers = (self.target_guide_renderer, ren, canvas_renderer)
@@ -1071,9 +1072,8 @@ class Viewer(wx.Panel):
                 pass
 
         # Clear EEG electrodes
-        for actor in self.eeg_actors.values():
-            self.ren.RemoveActor(actor)
-        self.eeg_actors.clear()
+        if hasattr(self, "eeg_visualizer") and self.eeg_visualizer:
+            self.eeg_visualizer.UpdateElectrodes([])
 
         if self.raycasting_volume:
             self.raycasting_volume = False
@@ -2005,77 +2005,16 @@ class Viewer(wx.Panel):
         self.ren.AddActor(self.SpreadEfieldFactorTextActor.actor)
 
     def OnToggleEEGElectrodesVisibility(self, show):
-        for actor in self.eeg_actors.values():
-            actor.SetVisibility(show)
-        self.UpdateRender()
-
-    def OnUpdateEEGElectrodes(self, electrodes_data, show=True):
-        import math
-
-        import numpy as np
-        import vtk
-
-        # Clear existing
-        for actor in self.eeg_actors.values():
-            self.ren.RemoveActor(actor)
-        self.eeg_actors.clear()
-
-        if not electrodes_data:
+        if hasattr(self, "eeg_visualizer") and self.eeg_visualizer:
+            self.eeg_visualizer.SetVisibility(show)
             self.UpdateRender()
-            return
 
-        for i, elec in enumerate(electrodes_data):
-            name = elec.get("name", f"E{i}")
-            position = elec.get("position", [0, 0, 0])
-            normal = elec.get("normal", [0, 0, 1])
-            color = elec.get("color", (0.5, 0.5, 0.5))
-
-            # Create torus
-            source = vtk.vtkParametricTorus()
-            source.SetRingRadius(3.0)
-            source.SetCrossSectionRadius(0.8)
-
-            source_fn = vtk.vtkParametricFunctionSource()
-            source_fn.SetParametricFunction(source)
-            source_fn.SetUResolution(40)
-            source_fn.SetVResolution(40)
-            source_fn.Update()
-
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(source_fn.GetOutputPort())
-
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            actor.GetProperty().SetColor(*color)
-            actor.GetProperty().SetOpacity(0.8)
-
-            source_z = np.array([0, 0, 1])
-            target_z = np.array(normal)
-            if np.linalg.norm(target_z) > 1e-6:
-                target_z = target_z / np.linalg.norm(target_z)
-            else:
-                target_z = source_z
-
-            axis = np.cross(source_z, target_z)
-            axis_norm = np.linalg.norm(axis)
-
-            transform = vtk.vtkTransform()
-            transform.Translate(position)
-
-            if axis_norm > 1e-6:
-                axis = axis / axis_norm
-                angle = math.degrees(math.acos(np.clip(np.dot(source_z, target_z), -1.0, 1.0)))
-                transform.RotateWXYZ(angle, axis[0], axis[1], axis[2])
-            elif np.dot(source_z, target_z) < 0:
-                transform.RotateWXYZ(180, 1, 0, 0)
-
-            actor.SetUserTransform(transform)
-            actor.SetVisibility(show)
-
-            self.ren.AddActor(actor)
-            self.eeg_actors[name] = actor
-
-        self.UpdateRender()
+    def OnUpdateEEGElectrodes(self, electrodes_data, show=True, highlight_name=None):
+        if hasattr(self, "eeg_visualizer") and self.eeg_visualizer:
+            self.eeg_visualizer.UpdateElectrodes(
+                electrodes_data, show=show, highlight_name=highlight_name
+            )
+            self.UpdateRender()
 
     def CalculateDistanceMaxEfieldCoGE(self):
         if (
