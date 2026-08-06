@@ -236,6 +236,10 @@ class MarkerVisualizer:
                 position_flipped, orientation, colour
             )
 
+        # For 'EEG electrode' type markers, create a ball.
+        elif marker_type == MarkerType.EEG_ELECTRODE:
+            actor = self.actor_factory.CreateBall(position_flipped, colour, size)
+
         else:
             assert False, "Invalid marker type."
 
