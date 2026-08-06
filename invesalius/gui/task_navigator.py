@@ -1746,6 +1746,9 @@ class StimulatorPage(wx.Panel):
         btn_edit.SetToolTip("Open preferences menu")
         btn_edit.Bind(wx.EVT_BUTTON, self.OnEditPreferences)
 
+        self.cb_eeg_only = wx.CheckBox(self, -1, _("EEG/Probe only (No coil)"))
+        self.cb_eeg_only.Bind(wx.EVT_CHECKBOX, self.OnEEGOnly)
+
         back_button = wx.Button(self, label="Back")
         back_button.Bind(wx.EVT_BUTTON, self.OnBack)
 
@@ -1776,6 +1779,7 @@ class StimulatorPage(wx.Panel):
             [
                 (border, 0, wx.ALIGN_CENTER | wx.TOP, 10),
                 stretch_spacer,
+                (self.cb_eeg_only, 0, wx.ALIGN_CENTER | wx.BOTTOM, 10),
                 (bottom_sizer, 0, wx.EXPAND | wx.BOTTOM, 10),
             ]
         )
@@ -1793,6 +1797,13 @@ class StimulatorPage(wx.Panel):
         Publisher.sendMessage("Enable start navigation button", enabled=False)
 
     def CoilSelectionDone(self, done):
+        if hasattr(self, "cb_eeg_only") and self.cb_eeg_only.GetValue():
+            self.navigation.eeg_only = True
+            self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
+            self.next_button.Enable(True)
+            self.lbl.Show()
+            return
+
         if done:
             self.lbl.SetLabel(
                 f"Ready for navigation with {self.navigation.n_coils} coil{'' if self.navigation.n_coils == 1 else 's'}!"
@@ -1802,6 +1813,15 @@ class StimulatorPage(wx.Panel):
 
         self.next_button.Enable(done)
         self.lbl.Show()
+
+    def OnEEGOnly(self, evt):
+        is_eeg_only = self.cb_eeg_only.GetValue()
+        self.navigation.eeg_only = is_eeg_only
+        if is_eeg_only:
+            self.lbl.SetLabel(_("Ready for navigation (EEG/Probe Mode)"))
+            self.next_button.Enable(True)
+        else:
+            self.CoilSelectionDone(self.navigation.CoilSelectionDone())
 
     def OnEditPreferences(self, evt):
         Publisher.sendMessage("Open preferences menu", page=3)
@@ -2155,6 +2175,7 @@ class ControlPanel(wx.Panel):
         self.icp = nav_hub.icp
         self.image = nav_hub.image
         self.mep_visualizer = nav_hub.mep_visualizer
+        self.nav_hub = nav_hub
 
         self.nav_status = False
 
@@ -2203,6 +2224,7 @@ class ControlPanel(wx.Panel):
         self.tractography_checkbox = tractography_checkbox
 
         # Toggle button to track the coil
+        has_coil = self.navigation.CoilSelectionDone()
         tooltip = _("Track coil")
         BMP_TRACK = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("coil.png")), wx.BITMAP_TYPE_PNG)
         track_object_button = wx.ToggleButton(
@@ -2210,7 +2232,7 @@ class ControlPanel(wx.Panel):
         )
         track_object_button.SetBackgroundColour(GREY_COLOR)
         track_object_button.SetBitmap(BMP_TRACK)
-        track_object_button.Enable(True)
+        track_object_button.Enable(has_coil)
         track_object_button.SetValue(False)
         track_object_button.SetToolTip(tooltip)
         track_object_button.Bind(
@@ -2248,7 +2270,7 @@ class ControlPanel(wx.Panel):
         show_coil_button.SetBitmap(BMP_SHOW_COIL)
         show_coil_button.SetToolTip(tooltip)
         show_coil_button.SetValue(False)
-        show_coil_button.Enable(True)
+        show_coil_button.Enable(has_coil)
         show_coil_button.Bind(wx.EVT_TOGGLEBUTTON, self.OnShowCoil)
         show_coil_button.Bind(wx.EVT_RIGHT_DOWN, self.ShowCoilChoice)
         self.show_coil_button = show_coil_button
@@ -2337,6 +2359,22 @@ class ControlPanel(wx.Panel):
         )
         self.show_motor_map_button = show_motor_map_button
 
+        # Button for EEG Digitization Wizard
+        tooltip = _("Digitize EEG Electrodes")
+        BMP_EEG = wx.Bitmap(str(inv_paths.ICON_DIR.joinpath("target.png")), wx.BITMAP_TYPE_PNG)
+        eeg_digitization_button = wx.ToggleButton(
+            scroll_panel, -1, "", style=pbtn.PB_STYLE_SQUARE, size=ICON_SIZE
+        )
+        eeg_digitization_button.SetBackgroundColour(GREY_COLOR)
+        eeg_digitization_button.SetBitmap(BMP_EEG)
+        eeg_digitization_button.SetToolTip(tooltip)
+        eeg_digitization_button.SetValue(False)
+        eeg_digitization_button.Enable(True)
+        eeg_digitization_button.Bind(
+            wx.EVT_TOGGLEBUTTON, partial(self.OnEEGDigitization, ctrl=eeg_digitization_button)
+        )
+        self.eeg_digitization_button = eeg_digitization_button
+
         # Sizers
         start_navigation_button_sizer = wx.BoxSizer(wx.VERTICAL)
         start_navigation_button_sizer.AddMany(
@@ -2357,6 +2395,7 @@ class ControlPanel(wx.Panel):
                 (show_coil_button),
                 (show_probe_button),
                 (show_motor_map_button),
+                (eeg_digitization_button),
             ]
         )
 
@@ -2407,6 +2446,11 @@ class ControlPanel(wx.Panel):
 
         Publisher.subscribe(self.PressMotorMapButton, "Press motor map button")
         Publisher.subscribe(self.EnableMotorMapButton, "Enable motor map button")
+        Publisher.subscribe(self.OnToggleEEGElectrodesColor, "Toggle EEG electrodes visibility")
+        Publisher.subscribe(self.OnUpdateEEGElectrodes, "Update EEG electrodes")
+
+        self.eeg_is_showing = True
+        self.eeg_has_electrodes = False
 
         # Conditions for enabling 'target mode' button:
         Publisher.subscribe(self.TrackObject, "Track object")
@@ -2531,6 +2575,8 @@ class ControlPanel(wx.Panel):
             self.UpdateToggleButton(self.checkbox_serial_port)
 
     def OnCoilSelectionDone(self, done):
+        self.EnableTrackObjectButton(done)
+        self.EnableShowCoilButton(done)
         self.PressTrackObjectButton(done)
         self.PressShowCoilButton(pressed=done)
 
@@ -2714,6 +2760,33 @@ class ControlPanel(wx.Panel):
         pressed = self.show_motor_map_button.GetValue()
         if self.mep_visualizer.DisplayMotorMap(show=pressed):
             self.UpdateToggleButton(self.show_motor_map_button)
+
+    def OnEEGDigitization(self, evt=None, ctrl=None):
+        if ctrl is not None:
+            self.UpdateToggleButton(ctrl, False)  # acts as a push button
+
+        from invesalius.gui.dialogs import EEGDigitizationDialog
+
+        dlg = EEGDigitizationDialog(self, self.nav_hub)
+        dlg.Show()
+
+    def OnUpdateEEGElectrodes(self, electrodes_data, show=True):
+        self.eeg_has_electrodes = len(electrodes_data) > 0
+        self.UpdateEEGButtonColor()
+
+    def OnToggleEEGElectrodesColor(self, show):
+        self.eeg_is_showing = show
+        self.UpdateEEGButtonColor()
+
+    def UpdateEEGButtonColor(self):
+        if self.eeg_has_electrodes:
+            if self.eeg_is_showing:
+                self.eeg_digitization_button.SetBackgroundColour(self.GREEN_COLOR)
+            else:
+                self.eeg_digitization_button.SetBackgroundColour(self.RED_COLOR)
+        else:
+            self.eeg_digitization_button.SetBackgroundColour(self.GREY_COLOR)
+        self.eeg_digitization_button.Refresh()
 
 
 class MarkersPanel(wx.Panel, ColumnSorterMixin):
