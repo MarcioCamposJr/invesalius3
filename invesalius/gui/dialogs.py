@@ -8494,7 +8494,7 @@ class EEGDigitizationDialog(wx.Dialog):
             -1,
             _("EEG Electrode Digitization"),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
-            size=(1000, 700),
+            size=(900, 650),
         )
         self.nav_hub = nav_hub
         self.eeg_montage = nav_hub.eeg_montage
@@ -8551,7 +8551,7 @@ class EEGDigitizationDialog(wx.Dialog):
         self.template_choice.Bind(wx.EVT_CHOICE, self.OnTemplateChanged)
 
         top_sizer.Add(lbl_template, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-        top_sizer.Add(self.template_choice, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+        top_sizer.Add(self.template_choice, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
         main_sizer.Add(top_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
@@ -8592,7 +8592,7 @@ class EEGDigitizationDialog(wx.Dialog):
 
         right_panel.SetSizer(right_sizer)
 
-        split_sizer.Add(vtk_panel, 2, wx.EXPAND | wx.ALL, 5)
+        split_sizer.Add(vtk_panel, 1, wx.EXPAND | wx.ALL, 5)
         split_sizer.Add(right_panel, 1, wx.EXPAND | wx.ALL, 5)
 
         main_sizer.Add(split_sizer, 1, wx.EXPAND | wx.ALL, 5)
@@ -8610,18 +8610,18 @@ class EEGDigitizationDialog(wx.Dialog):
         lbl_export_format = wx.StaticText(self, -1, _("Format:"))
         bottom_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS", "HPTS"])
+        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS", "HPTS"], size=(120, 30))
         self.choice_export_format.SetSelection(0)
         bottom_sizer.Add(self.choice_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
 
-        btn_export = wx.Button(self, -1, _("Export"))
+        btn_export = wx.Button(self, -1, _("Export"), size=(100, 30))
         btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
         bottom_sizer.Add(btn_export, 0, wx.ALL, 5)
 
-        btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"))
+        btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"), size=(100, 30))
         bottom_sizer.Add(btn_close, 0, wx.ALL, 5)
 
-        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.BOTTOM | wx.LEFT | wx.RIGHT, 5)
         self.SetSizer(main_sizer)
 
     def OnTemplateChanged(self, evt):
