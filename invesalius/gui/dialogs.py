@@ -8569,9 +8569,17 @@ class EEGDigitizationDialog(wx.Dialog):
         right_panel = wx.Panel(self)
         right_sizer = wx.BoxSizer(wx.VERTICAL)
 
+        top_btns_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
         btn_capture = wx.Button(right_panel, -1, _("Capture Point (Probe)"))
         btn_capture.Bind(wx.EVT_BUTTON, self.OnCaptureElectrode)
-        right_sizer.Add(btn_capture, 0, wx.EXPAND | wx.ALL, 5)
+        top_btns_sizer.Add(btn_capture, 1, wx.EXPAND | wx.RIGHT, 5)
+
+        btn_clear = wx.Button(right_panel, -1, _("Clear All Points"))
+        btn_clear.Bind(wx.EVT_BUTTON, self.OnClearAll)
+        top_btns_sizer.Add(btn_clear, 1, wx.EXPAND | wx.LEFT, 0)
+
+        right_sizer.Add(top_btns_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
         self.results_list = wx.ListCtrl(right_panel, -1, style=wx.LC_REPORT | wx.BORDER_SUNKEN)
         self.results_list.InsertColumn(0, _("ID"), width=50)
@@ -8586,9 +8594,22 @@ class EEGDigitizationDialog(wx.Dialog):
         btn_process.Bind(wx.EVT_BUTTON, self.OnProcessElectrodes)
         right_sizer.Add(btn_process, 0, wx.EXPAND | wx.ALL, 5)
 
-        btn_clear = wx.Button(right_panel, -1, _("Clear All Points"))
-        btn_clear.Bind(wx.EVT_BUTTON, self.OnClearAll)
-        right_sizer.Add(btn_clear, 0, wx.EXPAND | wx.ALL, 5)
+        bottom_right_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        lbl_export_format = wx.StaticText(right_panel, -1, _("Format:"))
+        bottom_right_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+
+        self.choice_export_format = wx.Choice(
+            right_panel, -1, choices=["BIDS", "HPTS"], size=(120, 30)
+        )
+        self.choice_export_format.SetSelection(0)
+        bottom_right_sizer.Add(self.choice_export_format, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+
+        btn_export = wx.Button(right_panel, -1, _("Export"), size=(100, 30))
+        btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
+        bottom_right_sizer.Add(btn_export, 0, wx.ALIGN_CENTER_VERTICAL, 0)
+
+        right_sizer.Add(bottom_right_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
         right_panel.SetSizer(right_sizer)
 
@@ -8604,22 +8625,6 @@ class EEGDigitizationDialog(wx.Dialog):
         self.cb_show_electrodes.SetValue(self.eeg_montage.show_electrodes)
         self.cb_show_electrodes.Bind(wx.EVT_CHECKBOX, self.OnToggleShowElectrodes)
         bottom_sizer.Add(self.cb_show_electrodes, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        bottom_sizer.AddStretchSpacer(1)
-
-        lbl_export_format = wx.StaticText(self, -1, _("Format:"))
-        bottom_sizer.Add(lbl_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        self.choice_export_format = wx.Choice(self, -1, choices=["BIDS", "HPTS"], size=(120, 30))
-        self.choice_export_format.SetSelection(0)
-        bottom_sizer.Add(self.choice_export_format, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        btn_export = wx.Button(self, -1, _("Export"), size=(100, 30))
-        btn_export.Bind(wx.EVT_BUTTON, self.OnExport)
-        bottom_sizer.Add(btn_export, 0, wx.ALL, 5)
-
-        btn_close = wx.Button(self, wx.ID_CANCEL, _("Close"), size=(100, 30))
-        bottom_sizer.Add(btn_close, 0, wx.ALL, 5)
 
         main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.BOTTOM | wx.LEFT | wx.RIGHT, 5)
         self.SetSizer(main_sizer)
