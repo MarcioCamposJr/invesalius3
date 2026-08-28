@@ -135,6 +135,10 @@ class Viewer(wx.Panel):
         x = int(display_size[0] / 2)
         y = int(display_size[1] / 2)
         wx.Panel.__init__(self, parent, size=wx.Size(x, y))
+        self._disposed = False
+        self._call_laters = []
+        self._ruler_observer_tag = None
+        self._cube_render_observer_tag = None
         self.SetBackgroundColour(wx.Colour(0, 0, 0))
 
         self.interaction_style = st.StyleStateManager()
@@ -394,7 +398,70 @@ class Viewer(wx.Panel):
         self._update_fps_visibility()
         # Request the orientation cube visibility status with a small delay
         # to ensure the interactor has time to initialize during app startup.
-        wx.CallLater(1000, Publisher.sendMessage, "Send orientation cube visibility status")
+        self._call_later(1000, Publisher.sendMessage, "Send orientation cube visibility status")
+
+    def _call_later(self, delay, callable_, *args, **kwargs):
+        if self._disposed:
+            return None
+
+        timer = wx.CallLater(delay, callable_, *args, **kwargs)
+        self._call_laters.append(timer)
+        return timer
+
+    def dispose(self):
+        if self._disposed:
+            return
+
+        self._disposed = True
+        Publisher.unsubscribe_owner(self)
+
+        for timer in self._call_laters:
+            try:
+                if timer.IsRunning():
+                    timer.Stop()
+            except RuntimeError:
+                pass
+        self._call_laters.clear()
+
+        if self.slice_plane:
+            self.slice_plane.dispose()
+            self.slice_plane = None
+
+        self.marker_visualizer.dispose()
+        self.coil_visualizer.dispose()
+        self.probe_visualizer.dispose()
+        self.robot_force_visualizer.dispose()
+        self.vector_field_visualizer.dispose()
+
+        if self.orientation_widget is not None:
+            try:
+                self.orientation_widget.SetEnabled(0)
+            except Exception:
+                pass
+
+        if self._cube_render_observer_tag is not None:
+            try:
+                self.ren.RemoveObserver(self._cube_render_observer_tag)
+            except Exception:
+                pass
+            self._cube_render_observer_tag = None
+
+        if self._ruler_observer_tag is not None:
+            try:
+                self.interactor.RemoveObserver(self._ruler_observer_tag)
+            except Exception:
+                pass
+            self._ruler_observer_tag = None
+
+        try:
+            self.interactor.Disable()
+        except Exception:
+            pass
+
+    def OnDestroy(self, evt):
+        if evt.GetEventObject() is self:
+            self.dispose()
+        evt.Skip()
 
     def _update_fps_visibility(self):
         show_fps = (
@@ -412,7 +479,11 @@ class Viewer(wx.Panel):
 
     def EnableRuler(self):
         self.ruler = GenericLeftRulerVolume(self)
-        self.interactor.AddObserver(vtkCommand.AnyEvent, self.OnInteractorEvent)
+        if self._ruler_observer_tag is not None:
+            self.interactor.RemoveObserver(self._ruler_observer_tag)
+        self._ruler_observer_tag = self.interactor.AddObserver(
+            vtkCommand.AnyEvent, self.OnInteractorEvent
+        )
         Publisher.sendMessage("Send ruler visibility status")
 
     def ShowRuler(self):
@@ -477,11 +548,11 @@ class Viewer(wx.Panel):
         """
         Build and enable the 3D orientation cube (anatomical directions).
         """
-        if not getattr(self, "_cube_request_on", False):
+        if self._disposed or not getattr(self, "_cube_request_on", False):
             return
 
         if not self.interactor:
-            wx.CallLater(100, self._ShowOrientationCube)
+            self._call_later(100, self._ShowOrientationCube)
             return
 
         if not self.interactor.GetInitialized():
@@ -491,7 +562,7 @@ class Viewer(wx.Panel):
             retries = getattr(self, "_cube_retries", 0)
             if retries < 200:
                 self._cube_retries = retries + 1
-                wx.CallLater(100, self._ShowOrientationCube)
+                self._call_later(100, self._ShowOrientationCube)
             else:
                 import logging
 
@@ -1070,13 +1141,11 @@ class Viewer(wx.Panel):
             self.raycasting_volume = False
 
         if self.slice_plane:
-            self.slice_plane.Disable()
-            self.slice_plane.DeletePlanes()
-            del self.slice_plane
+            self.slice_plane.dispose()
+            self.slice_plane = None
             Publisher.sendMessage("Uncheck image plane menu")
             self.mouse_pressed = 0
             self.on_wl = False
-            self.slice_plane = 0
 
         self.interaction_style.Reset()
         self.SetInteractorStyle(const.STATE_DEFAULT)
@@ -3116,7 +3185,7 @@ class Viewer(wx.Panel):
     def __bind_events_wx(self):
         # self.Bind(wx.EVT_SIZE, self.OnSize)
         #  self.canvas.subscribe_event('LeftButtonPressEvent', self.on_insert_point)
-        pass
+        self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
 
     def on_insert_point(self, evt):
         pos = evt.position
@@ -3502,6 +3571,8 @@ class Viewer(wx.Panel):
             self.UpdateRender()
 
     def LoadSlicePlane(self):
+        if self.slice_plane:
+            self.slice_plane.dispose()
         self.slice_plane = SlicePlane()
 
     def LoadVolume(self, volume, colour, ww, wl):
@@ -3974,10 +4045,13 @@ class Viewer(wx.Panel):
             # This is needed because when loading from .inv3, the render window may not be ready yet
             import wx
 
-            wx.CallLater(500, self._RetryEnableSSAO)  # Retry after 500ms
+            self._call_later(500, self._RetryEnableSSAO)  # Retry after 500ms
 
     def _RetryEnableSSAO(self):
         """Retry enabling SSAO after a delay to ensure render window is ready"""
+        if self._disposed:
+            return
+
         render_window = self.interactor.GetRenderWindow()
         if render_window:
             if not render_window.GetNeverRendered():
@@ -3987,7 +4061,7 @@ class Viewer(wx.Panel):
                 # Render window still not rendered, retry again after another delay
                 import wx
 
-                wx.CallLater(500, self._RetryEnableSSAO)
+                self._call_later(500, self._RetryEnableSSAO)
 
     def Reposition3DPlane(self, plane_label):
         if not self.surface_added and not self.raycasting_volume:
@@ -4006,6 +4080,7 @@ class Viewer(wx.Panel):
 
 class SlicePlane:
     def __init__(self):
+        self._disposed = False
         project = prj.Project()
         self.original_orientation = project.original_orientation
         self.Create()
@@ -4017,6 +4092,16 @@ class SlicePlane:
         Publisher.subscribe(self.Disable, "Disable plane")
         Publisher.subscribe(self.ChangeSlice, "Change slice from slice plane")
         Publisher.subscribe(self.UpdateAllSlice, "Update all slice")
+
+    def dispose(self):
+        if self._disposed:
+            return
+
+        self._disposed = True
+        Publisher.unsubscribe_owner(self)
+        for plane in (self.plane_x, self.plane_y, self.plane_z):
+            plane.Off()
+        self.DeletePlanes()
 
     def Create(self):
         plane_x = self.plane_x = vtkImagePlaneWidget()
@@ -4145,6 +4230,6 @@ class SlicePlane:
         Publisher.sendMessage("Update slice 3D", widget=self.plane_z, orientation="AXIAL")
 
     def DeletePlanes(self):
-        del self.plane_x
-        del self.plane_y
-        del self.plane_z
+        self.plane_x = None
+        self.plane_y = None
+        self.plane_z = None
