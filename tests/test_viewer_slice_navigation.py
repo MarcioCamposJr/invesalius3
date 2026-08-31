@@ -1,39 +1,43 @@
-from invesalius.data.viewer_slice_state import SliceNavigationUpdateState
+from unittest.mock import Mock
+
+import invesalius.data.slice_  # noqa: F401 - establishes the application's import order
+from invesalius.data.viewer_slice import Viewer
 
 
-def test_hidden_navigation_viewer_keeps_only_latest_position():
-    state = SliceNavigationUpdateState(updates_enabled=False)
+class NavigationViewer:
+    UpdateSlicesPosition = Viewer.UpdateSlicesPosition
+    SetNavigationUpdatesEnabled = Viewer.SetNavigationUpdatesEnabled
+    UpdateRender = Viewer.UpdateRender
 
-    first_deferred = state.defer_position((1, 2, 3, 4, 5, 6), navigation_active=True)
-    second_deferred = state.defer_position((7, 8, 9, 10, 11, 12), navigation_active=True)
-
-    assert first_deferred is True
-    assert second_deferred is True
-    assert state.pending_position == (7, 8, 9)
-
-
-def test_enabling_navigation_updates_applies_latest_position():
-    state = SliceNavigationUpdateState(
-        updates_enabled=False,
-        pending_position=(7, 8, 9),
-    )
-
-    position = state.set_updates_enabled(True)
-
-    assert position == (7, 8, 9)
-    assert state.updates_enabled is True
-    assert state.pending_position is None
+    def __init__(self, navigation_active, updates_enabled):
+        self.nav_status = navigation_active
+        self._slice_navigation_updates_enabled = updates_enabled
+        self._pending_navigation_position = None
+        self._apply_navigation_position = Mock()
+        self.interactor = Mock()
 
 
-def test_hidden_navigation_viewer_skips_render():
-    state = SliceNavigationUpdateState(updates_enabled=False)
+def test_hidden_navigation_viewer_applies_only_latest_position_when_reenabled():
+    viewer = NavigationViewer(navigation_active=True, updates_enabled=False)
 
-    assert state.should_render(navigation_active=True) is False
+    viewer.UpdateSlicesPosition((1, 2, 3, 4, 5, 6))
+    viewer.UpdateSlicesPosition((7, 8, 9, 10, 11, 12))
+    viewer.UpdateRender()
+
+    viewer._apply_navigation_position.assert_not_called()
+    viewer.interactor.Render.assert_not_called()
+
+    viewer.SetNavigationUpdatesEnabled(True)
+
+    viewer._apply_navigation_position.assert_called_once_with((7, 8, 9))
+    assert viewer._pending_navigation_position is None
 
 
-def test_visible_or_idle_viewer_renders():
-    enabled = SliceNavigationUpdateState(updates_enabled=True)
-    hidden_but_idle = SliceNavigationUpdateState(updates_enabled=False)
+def test_disabled_updates_do_not_affect_viewer_outside_navigation():
+    viewer = NavigationViewer(navigation_active=False, updates_enabled=False)
 
-    assert enabled.should_render(navigation_active=True) is True
-    assert hidden_but_idle.should_render(navigation_active=False) is True
+    viewer.UpdateSlicesPosition((1, 2, 3, 4, 5, 6))
+    viewer.UpdateRender()
+
+    viewer._apply_navigation_position.assert_called_once_with((1, 2, 3))
+    viewer.interactor.Render.assert_called_once_with()

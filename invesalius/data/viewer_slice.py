@@ -51,7 +51,6 @@ import invesalius.data.measures as measures
 import invesalius.data.slice_ as sl
 import invesalius.data.slice_data as sd
 import invesalius.data.styles as styles
-import invesalius.data.viewer_slice_state as viewer_slice_state
 import invesalius.data.vtk_utils as vtku
 import invesalius.project as project
 import invesalius.session as ses
@@ -234,7 +233,8 @@ class Viewer(wx.Panel):
         self.slice_number = 0
         self.scroll_enabled = True
         self.nav_status = False
-        self._navigation_update_state = viewer_slice_state.SliceNavigationUpdateState()
+        self._slice_navigation_updates_enabled = True
+        self._pending_navigation_position = None
 
         self.__init_gui()
 
@@ -677,9 +677,11 @@ class Viewer(wx.Panel):
 
     def UpdateSlicesPosition(self, position):
         position = tuple(position[:3])
-        if self._navigation_update_state.defer_position(position, self.nav_status):
+        if self.nav_status and not self._slice_navigation_updates_enabled:
+            self._pending_navigation_position = position
             return
 
+        self._pending_navigation_position = None
         self._apply_navigation_position(position)
 
     def _apply_navigation_position(self, position):
@@ -1168,9 +1170,13 @@ class Viewer(wx.Panel):
         self.nav_status = nav_status
 
     def SetNavigationUpdatesEnabled(self, enabled):
-        position = self._navigation_update_state.set_updates_enabled(enabled)
-        if position is not None:
-            self._apply_navigation_position(position)
+        self._slice_navigation_updates_enabled = enabled
+        if not enabled or self._pending_navigation_position is None:
+            return
+
+        position = self._pending_navigation_position
+        self._pending_navigation_position = None
+        self._apply_navigation_position(position)
 
     def OnSize(self, evt):
         """
@@ -1452,7 +1458,7 @@ class Viewer(wx.Panel):
         self.slice_data.renderer.ResetCameraClippingRange()
 
     def UpdateRender(self):
-        if not self._navigation_update_state.should_render(self.nav_status):
+        if self.nav_status and not self._slice_navigation_updates_enabled:
             return
         self.interactor.Render()
 
