@@ -113,7 +113,7 @@ class QueueCustom(queue.Queue):
 
 
 class NavigationRenderScheduler:
-    def __init__(self, volume_fps=30.0, slice_fps=10.0):
+    def __init__(self, volume_fps=60.0, slice_fps=10.0):
         self._volume_interval = 1.0 / volume_fps
         self._slice_interval = 1.0 / slice_fps
         self._last_volume_render = float("-inf")
