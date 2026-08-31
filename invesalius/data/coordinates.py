@@ -20,7 +20,7 @@
 import threading
 from math import cos, sin
 from random import uniform
-from time import sleep
+from time import monotonic, sleep
 from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -783,8 +783,11 @@ class ReceiveCoordinates(threading.Thread):
 
     def run(self) -> None:
         while not self.event.is_set():
+            cycle_start = monotonic()
             coord_raw, marker_visibilities = GetCoordinatesForThread(
                 self.tracker_connection, self.tracker_id, const.DEFAULT_REF_MODE
             )
             self.TrackerCoordinates.SetCoordinates(coord_raw, marker_visibilities)
-            sleep(self.sleep_coord)
+            remaining = self.sleep_coord - (monotonic() - cycle_start)
+            if remaining > 0:
+                self.event.wait(remaining)
