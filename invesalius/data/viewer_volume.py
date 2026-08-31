@@ -1183,76 +1183,83 @@ class Viewer(wx.Panel):
         return self.target_mode
 
     def CreateTargetGuide(self):
-        if self.guide_coil_actors is None:
-            # The default model avoids overlaps caused by custom coil models.
-            coil_path = os.path.join(inv_paths.OBJ_DIR, "magstim_fig8_coil.stl")
-            obj_polydata = vtku.CreateObjectPolyData(coil_path)
+        if self.guide_coil_actors is not None:
+            self._ResetTargetGuideActors()
+            for actor in (*self.guide_coil_actors, *self.guide_arrow_actors):
+                self.target_guide_renderer.AddActor(actor)
+            return
 
-            normals = vtkPolyDataNormals()
-            normals.SetInputData(obj_polydata)
-            normals.SetFeatureAngle(80)
-            normals.AutoOrientNormalsOn()
-            normals.Update()
+        # Using default coil for target guide model as using self.coil_path can cause custom models to overlap.
+        coil_path = os.path.join(inv_paths.OBJ_DIR, "magstim_fig8_coil.stl")
+        obj_polydata = vtku.CreateObjectPolyData(coil_path)
 
-            mapper = vtkPolyDataMapper()
-            mapper.SetInputData(normals.GetOutput())
-            mapper.ScalarVisibilityOff()
+        normals = vtkPolyDataNormals()
+        normals.SetInputData(obj_polydata)
+        normals.SetFeatureAngle(80)
+        normals.AutoOrientNormalsOn()
+        normals.Update()
 
-            obj_roll = vtkActor()
-            obj_roll.SetMapper(mapper)
-            obj_roll.GetProperty().SetColor(1, 1, 1)
-            obj_roll.SetPosition(0, 25, -30)
-            obj_roll.RotateX(-60)
-            obj_roll.RotateZ(180)
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputData(normals.GetOutput())
+        mapper.ScalarVisibilityOff()
 
-            obj_yaw = vtkActor()
-            obj_yaw.SetMapper(mapper)
-            obj_yaw.GetProperty().SetColor(1, 1, 1)
-            obj_yaw.SetPosition(0, -115, 5)
-            obj_yaw.RotateZ(180)
+        obj_roll = vtkActor()
+        obj_roll.SetMapper(mapper)
+        obj_roll.GetProperty().SetColor(1, 1, 1)
+        obj_roll.SetPosition(0, 25, -30)
+        obj_roll.RotateX(-60)
+        obj_roll.RotateZ(180)
 
-            obj_pitch = vtkActor()
-            obj_pitch.SetMapper(mapper)
-            obj_pitch.GetProperty().SetColor(1, 1, 1)
-            obj_pitch.SetPosition(5, -265, 5)
-            obj_pitch.RotateY(90)
-            obj_pitch.RotateZ(180)
+        obj_yaw = vtkActor()
+        obj_yaw.SetMapper(mapper)
+        obj_yaw.GetProperty().SetColor(1, 1, 1)
+        obj_yaw.SetPosition(0, -115, 5)
+        obj_yaw.RotateZ(180)
 
-            self.guide_coil_actors = obj_roll, obj_yaw, obj_pitch
+        obj_pitch = vtkActor()
+        obj_pitch.SetMapper(mapper)
+        obj_pitch.GetProperty().SetColor(1, 1, 1)
+        obj_pitch.SetPosition(5, -265, 5)
+        obj_pitch.RotateY(90)
+        obj_pitch.RotateZ(180)
 
-        if self.guide_arrow_actors is None:
-            arrow_roll_z1 = self._CreateTargetGuideArrow([-50, -35, 12], [-50, -35, 50], (1, 1, 0))
-            arrow_roll_z1.RotateX(-60)
-            arrow_roll_z1.RotateZ(180)
-            arrow_roll_z2 = self._CreateTargetGuideArrow([50, -35, 0], [50, -35, -50], (1, 1, 0))
-            arrow_roll_z2.RotateX(-60)
-            arrow_roll_z2.RotateZ(180)
+        arrow_roll_z1 = self._CreateTargetGuideArrow([-50, -35, 12], [-50, -35, 50], (1, 1, 0))
+        arrow_roll_z1.RotateX(-60)
+        arrow_roll_z1.RotateZ(180)
+        arrow_roll_z2 = self._CreateTargetGuideArrow([50, -35, 0], [50, -35, -50], (1, 1, 0))
+        arrow_roll_z2.RotateX(-60)
+        arrow_roll_z2.RotateZ(180)
 
-            arrow_yaw_y1 = self._CreateTargetGuideArrow([-50, -35, 0], [-50, 5, 0], (0, 1, 0))
-            arrow_yaw_y1.SetPosition(0, -150, 0)
-            arrow_yaw_y1.RotateZ(180)
-            arrow_yaw_y2 = self._CreateTargetGuideArrow([50, -35, 0], [50, -75, 0], (0, 1, 0))
-            arrow_yaw_y2.SetPosition(0, -150, 0)
-            arrow_yaw_y2.RotateZ(180)
+        arrow_yaw_y1 = self._CreateTargetGuideArrow([-50, -35, 0], [-50, 5, 0], (0, 1, 0))
+        arrow_yaw_y1.SetPosition(0, -150, 0)
+        arrow_yaw_y1.RotateZ(180)
+        arrow_yaw_y2 = self._CreateTargetGuideArrow([50, -35, 0], [50, -75, 0], (0, 1, 0))
+        arrow_yaw_y2.SetPosition(0, -150, 0)
+        arrow_yaw_y2.RotateZ(180)
 
-            arrow_pitch_x1 = self._CreateTargetGuideArrow([0, 65, 38], [0, 65, 68], (1, 0, 0))
-            arrow_pitch_x1.SetPosition(0, -300, 0)
-            arrow_pitch_x1.RotateY(90)
-            arrow_pitch_x1.RotateZ(180)
-            arrow_pitch_x2 = self._CreateTargetGuideArrow([0, -55, 5], [0, -55, -30], (1, 0, 0))
-            arrow_pitch_x2.SetPosition(0, -300, 0)
-            arrow_pitch_x2.RotateY(90)
-            arrow_pitch_x2.RotateZ(180)
+        arrow_pitch_x1 = self._CreateTargetGuideArrow([0, 65, 38], [0, 65, 68], (1, 0, 0))
+        arrow_pitch_x1.SetPosition(0, -300, 0)
+        arrow_pitch_x1.RotateY(90)
+        arrow_pitch_x1.RotateZ(180)
+        arrow_pitch_x2 = self._CreateTargetGuideArrow([0, -55, 5], [0, -55, -30], (1, 0, 0))
+        arrow_pitch_x2.SetPosition(0, -300, 0)
+        arrow_pitch_x2.RotateY(90)
+        arrow_pitch_x2.RotateZ(180)
 
-            self.guide_arrow_actors = (
-                arrow_roll_z1,
-                arrow_roll_z2,
-                arrow_yaw_y1,
-                arrow_yaw_y2,
-                arrow_pitch_x1,
-                arrow_pitch_x2,
-            )
+        self.guide_coil_actors = obj_roll, obj_yaw, obj_pitch
+        self.guide_arrow_actors = (
+            arrow_roll_z1,
+            arrow_roll_z2,
+            arrow_yaw_y1,
+            arrow_yaw_y2,
+            arrow_pitch_x1,
+            arrow_pitch_x2,
+        )
 
+        for actor in (*self.guide_coil_actors, *self.guide_arrow_actors):
+            self.target_guide_renderer.AddActor(actor)
+
+    def _ResetTargetGuideActors(self):
         for actor in self.guide_coil_actors:
             actor.GetProperty().SetColor(1, 1, 1)
 
@@ -1268,9 +1275,6 @@ class Viewer(wx.Panel):
             self.guide_arrow_actors, initial_arrow_positions
         ):
             self._UpdateTargetGuideArrow(actor, start_point, end_point)
-
-        for actor in (*self.guide_coil_actors, *self.guide_arrow_actors):
-            self.target_guide_renderer.AddActor(actor)
 
     def _CreateTargetGuideArrow(self, start_point, end_point, colour):
         if self._target_guide_arrow_mapper is None:
