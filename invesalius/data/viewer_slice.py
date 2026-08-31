@@ -51,6 +51,7 @@ import invesalius.data.measures as measures
 import invesalius.data.slice_ as sl
 import invesalius.data.slice_data as sd
 import invesalius.data.styles as styles
+import invesalius.data.viewer_slice_state as viewer_slice_state
 import invesalius.data.vtk_utils as vtku
 import invesalius.project as project
 import invesalius.session as ses
@@ -233,6 +234,7 @@ class Viewer(wx.Panel):
         self.slice_number = 0
         self.scroll_enabled = True
         self.nav_status = False
+        self._navigation_update_state = viewer_slice_state.SliceNavigationUpdateState()
 
         self.__init_gui()
 
@@ -674,6 +676,13 @@ class Viewer(wx.Panel):
             self.slice_data.cursor.SetColour(colour_vtk)
 
     def UpdateSlicesPosition(self, position):
+        position = tuple(position[:3])
+        if self._navigation_update_state.defer_position(position, self.nav_status):
+            return
+
+        self._apply_navigation_position(position)
+
+    def _apply_navigation_position(self, position):
         # Get point from base change
         px, py = self.get_slice_pixel_coord_by_world_pos(*position)
         coord = self.calcultate_scroll_position(px, py)
@@ -1018,6 +1027,9 @@ class Viewer(wx.Panel):
         Publisher.subscribe(self.GetCrossPos, "Set Update cross pos")
         Publisher.subscribe(self.UpdateCross, "Update cross pos")
         Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(
+            self.SetNavigationUpdatesEnabled, "Set slice navigation updates enabled"
+        )
         Publisher.subscribe(self.OnHighlightMarker, "Highlight marker")
         Publisher.subscribe(self.OnUnhighlightMarker, "Unhighlight marker")
         Publisher.subscribe(self.OnDeleteMarker, "Delete marker")
@@ -1154,6 +1166,11 @@ class Viewer(wx.Panel):
 
     def OnNavigationStatus(self, nav_status, vis_status):
         self.nav_status = nav_status
+
+    def SetNavigationUpdatesEnabled(self, enabled):
+        position = self._navigation_update_state.set_updates_enabled(enabled)
+        if position is not None:
+            self._apply_navigation_position(position)
 
     def OnSize(self, evt):
         """
@@ -1435,6 +1452,8 @@ class Viewer(wx.Panel):
         self.slice_data.renderer.ResetCameraClippingRange()
 
     def UpdateRender(self):
+        if not self._navigation_update_state.should_render(self.nav_status):
+            return
         self.interactor.Render()
 
     def UpdateCanvas(self, evt=None):
