@@ -44,6 +44,7 @@ from vtkmodules.vtkCommonDataModel import (
 from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkCommonTransforms import vtkTransform
 from vtkmodules.vtkFiltersCore import vtkCenterOfMass, vtkGlyph3D, vtkPolyDataNormals
+from vtkmodules.vtkFiltersGeneral import vtkTransformPolyDataFilter
 from vtkmodules.vtkFiltersHybrid import vtkRenderLargeImage
 from vtkmodules.vtkFiltersModeling import vtkBandedPolyDataContourFilter
 from vtkmodules.vtkFiltersSources import (
@@ -266,7 +267,7 @@ class Viewer(wx.Panel):
         self.show_coil = False
         self.guide_coil_actors = None
         self.guide_arrow_actors = None
-        self._target_guide_arrow_mapper = None
+        self._target_guide_arrow_source = None
         self.pTarget = [0.0, 0.0, 0.0]
 
         self.distance_text = None
@@ -1277,19 +1278,22 @@ class Viewer(wx.Panel):
             self._UpdateTargetGuideArrow(actor, start_point, end_point)
 
     def _CreateTargetGuideArrow(self, start_point, end_point, colour):
-        if self._target_guide_arrow_mapper is None:
+        if self._target_guide_arrow_source is None:
             arrow_source = vtkArrowSource()
             arrow_source.SetTipResolution(8)
             arrow_source.SetShaftResolution(8)
+            self._target_guide_arrow_source = arrow_source
 
-            mapper = vtkPolyDataMapper()
-            mapper.SetInputConnection(arrow_source.GetOutputPort())
-            self._target_guide_arrow_mapper = mapper
+        transform_filter = vtkTransformPolyDataFilter()
+        transform_filter.SetTransform(vtkTransform())
+        transform_filter.SetInputConnection(self._target_guide_arrow_source.GetOutputPort())
+
+        mapper = vtkPolyDataMapper()
+        mapper.SetInputConnection(transform_filter.GetOutputPort())
 
         actor = vtkActor()
-        actor.SetMapper(self._target_guide_arrow_mapper)
+        actor.SetMapper(mapper)
         actor.GetProperty().SetColor(colour)
-        actor.SetUserTransform(vtkTransform())
         self._UpdateTargetGuideArrow(actor, start_point, end_point)
         return actor
 
@@ -1318,11 +1322,13 @@ class Viewer(wx.Panel):
             matrix.SetElement(index, 1, perpendicular[index])
             matrix.SetElement(index, 2, normal[index])
 
-        transform = actor.GetUserTransform()
+        transform_filter = actor.GetMapper().GetInputAlgorithm()
+        transform = transform_filter.GetTransform()
         transform.Identity()
         transform.Translate(start)
         transform.Concatenate(matrix)
         transform.Scale(length, length, length)
+        transform_filter.Modified()
 
     def EnableTargetMode(self):
         # Store the current camera settings so that they can be restored when the target mode is disabled.
