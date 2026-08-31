@@ -124,6 +124,7 @@ else:
     _has_win32api = False
 
 PROP_MEASURE = 0.8
+NAVIGATION_DESIRED_UPDATE_RATE = 100.0
 
 #  from invesalius.gui.widgets.canvas_renderer import CanvasRendererCTX, Polygon
 
@@ -164,6 +165,7 @@ class Viewer(wx.Panel):
         self.fps_text.SetValue("FPS: --")
         self._fps_text_visible = True
         self.nav_status = False
+        self._navigation_previous_desired_update_rate = None
 
         self.enable_style(const.STATE_DEFAULT)
 
@@ -3063,9 +3065,17 @@ class Viewer(wx.Panel):
         self.nav_status = nav_status
         self.tracts_status = vis_status[1]
 
+        render_window = self.interactor.GetRenderWindow()
+
         if self.nav_status:
+            if self._navigation_previous_desired_update_rate is None:
+                self._navigation_previous_desired_update_rate = render_window.GetDesiredUpdateRate()
+            render_window.SetDesiredUpdateRate(NAVIGATION_DESIRED_UPDATE_RATE)
             self.pTarget = self.CenterOfMass()
             self.RemoveEfieldVectorActor()
+        elif self._navigation_previous_desired_update_rate is not None:
+            render_window.SetDesiredUpdateRate(self._navigation_previous_desired_update_rate)
+            self._navigation_previous_desired_update_rate = None
 
         self.camera_show_object = None
         self._update_fps_visibility()
