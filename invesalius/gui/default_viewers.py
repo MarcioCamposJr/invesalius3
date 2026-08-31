@@ -47,6 +47,7 @@ class Panel(wx.Panel):
     def __init__(self, parent):
         wx.Panel.__init__(self, parent, pos=wx.Point(0, 50), size=wx.Size(744, 656))
 
+        self._slice_navigation_updates_enabled = True
         self.__init_aui_manager()
         self.__bind_events_wx()
         self.__bind_events()
@@ -187,6 +188,7 @@ class Panel(wx.Panel):
         self.aui_manager.RestoreMaximizedPane()
         Publisher.sendMessage("Hide raycasting widget")
         self.aui_manager.Update()
+        self.SetSliceNavigationUpdatesEnabled(True)
 
     def MaximizeViewerVolume(self):
         # Restore volume viewer to make sure it is not already maximized before attempting to maximize it
@@ -197,14 +199,26 @@ class Panel(wx.Panel):
         )  # Viewer volume is the last pane
         Publisher.sendMessage("Show raycasting widget")
         self.aui_manager.Update()
+        self.SetSliceNavigationUpdatesEnabled(False)
+
+    def SetSliceNavigationUpdatesEnabled(self, enabled):
+        if enabled == self._slice_navigation_updates_enabled:
+            return
+
+        self._slice_navigation_updates_enabled = enabled
+        Publisher.sendMessage("Set slice navigation updates enabled", enabled=enabled)
+        if enabled:
+            wx.CallAfter(Publisher.sendMessage, "Update slice viewer")
 
     def OnMaximize(self, evt):
         if evt.GetPane().name == self.s4.name:
             Publisher.sendMessage("Show raycasting widget")
+            self.SetSliceNavigationUpdatesEnabled(False)
 
     def OnRestore(self, evt):
         if evt.GetPane().name == self.s4.name:
             Publisher.sendMessage("Hide raycasting widget")
+            self.SetSliceNavigationUpdatesEnabled(True)
 
     def _Exit(self):
         self.aui_manager.UnInit()
