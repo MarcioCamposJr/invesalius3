@@ -112,6 +112,38 @@ class QueueCustom(queue.Queue):
             self.not_full.notify_all()
 
 
+class NavigationRenderScheduler:
+    def __init__(self, volume_fps=30.0, slice_fps=10.0):
+        self._volume_interval = 1.0 / volume_fps
+        self._slice_interval = 1.0 / slice_fps
+        self._last_volume_render = float("-inf")
+        self._last_slice_render = float("-inf")
+        self._volume_pending = False
+        self._slice_pending = False
+
+    def request_render(self, *, volume=False, slices=False):
+        self._volume_pending = self._volume_pending or volume
+        self._slice_pending = self._slice_pending or slices
+
+    def consume_ready(self, now=None):
+        if now is None:
+            now = time.monotonic()
+
+        volume_ready = (
+            self._volume_pending and now - self._last_volume_render >= self._volume_interval
+        )
+        slices_ready = self._slice_pending and now - self._last_slice_render >= self._slice_interval
+
+        if volume_ready:
+            self._volume_pending = False
+            self._last_volume_render = now
+        if slices_ready:
+            self._slice_pending = False
+            self._last_slice_render = now
+
+        return volume_ready, slices_ready
+
+
 class UpdateNavigationScene(threading.Thread):
     def __init__(self, vis_queues, vis_components, event, sle, neuronavigation_api):
         """Class (threading) to update the navigation scene with all graphical elements.
@@ -149,20 +181,21 @@ class UpdateNavigationScene(threading.Thread):
         self.event = event
         self.neuronavigation_api = neuronavigation_api
         self.navigation = Navigation()
-        self._last_render = 0.0
-        self._render_interval = max(self.sle, 1.0 / 100.0)
-        self._slice_render_interval = max(self.sle, 1.0 / 10.0)
+        self._pose_update_interval = max(self.sle, 1.0 / 100.0)
+        self._render_scheduler = NavigationRenderScheduler()
         self._loop_sleep = max(self.sle, 1.0 / 120.0)
         self._last_pose_update = 0.0
         self._last_dispatch = 0.0
         self._dispatch_pending = False
-        self._last_slice_render = 0.0
+
+    def request_render(self, *, volume=False, slices=False):
+        self._render_scheduler.request_render(volume=volume, slices=slices)
 
     def _dispatch_updates(
         self,
         *,
         update_pose,
-        render,
+        volume_render,
         slice_render,
         coord,
         probe_visible,
@@ -191,8 +224,10 @@ class UpdateNavigationScene(threading.Thread):
             if trigger_on:
                 Publisher.sendMessage("Create marker", marker_type=MarkerType.COIL_POSE)
 
-            if update_pose:
+            if slice_render:
                 Publisher.sendMessage("Update slices position", position=coord[:3])
+
+            if update_pose:
                 Publisher.sendMessage("Set cross focal point", position=coord)
                 Publisher.sendMessage(
                     "Update volume viewer pointer",
@@ -239,10 +274,10 @@ class UpdateNavigationScene(threading.Thread):
                         coord=probe_coord,
                     )
 
-            if render:
+            if volume_render:
                 Publisher.sendMessage("Render volume viewer")
-                if slice_render:
-                    Publisher.sendMessage("Update slice viewer")
+            if slice_render:
+                Publisher.sendMessage("Update slice viewer")
         finally:
             self._dispatch_pending = False
 
@@ -300,9 +335,7 @@ class UpdateNavigationScene(threading.Thread):
                     self.serial_port_queue.task_done()
 
             now = time.monotonic()
-            update_pose = now - self._last_pose_update >= self._render_interval
-            render = now - self._last_render >= self._render_interval
-            slice_render = render and (now - self._last_slice_render >= self._slice_render_interval)
+            update_pose = now - self._last_pose_update >= self._pose_update_interval
             enorm_data = None
             if update_pose and coil_visible and self.e_field_loaded:
                 try:
@@ -314,19 +347,20 @@ class UpdateNavigationScene(threading.Thread):
 
             if update_pose:
                 self._last_pose_update = now
-            if render:
-                self._last_render = now
-            if slice_render:
-                self._last_slice_render = now
+                self.request_render(volume=True, slices=True)
+            if tracts_payload is not None:
+                self.request_render(volume=True)
 
-            if update_pose or render or tracts_payload is not None or trigger_on:
-                if not self._dispatch_pending and now - self._last_dispatch >= self._loop_sleep:
+            has_updates = update_pose or tracts_payload is not None or trigger_on
+            if not self._dispatch_pending and now - self._last_dispatch >= self._loop_sleep:
+                volume_render, slice_render = self._render_scheduler.consume_ready(now)
+                if has_updates or volume_render or slice_render:
                     self._last_dispatch = now
                     self._dispatch_pending = True
                     wx.CallAfter(
                         self._dispatch_updates,
                         update_pose=update_pose,
-                        render=render,
+                        volume_render=volume_render,
                         slice_render=slice_render,
                         coord=coord,
                         probe_visible=probe_visible,

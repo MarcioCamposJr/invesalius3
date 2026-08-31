@@ -1,0 +1,15 @@
+from invesalius.navigation.navigation import NavigationRenderScheduler
+
+
+def test_navigation_render_requests_are_coalesced_at_independent_rates():
+    scheduler = NavigationRenderScheduler(volume_fps=30.0, slice_fps=10.0)
+
+    scheduler.request_render(volume=True, slices=True)
+    scheduler.request_render(volume=True, slices=True)
+    assert scheduler.consume_ready(now=0.0) == (True, True)
+
+    scheduler.request_render(volume=True, slices=True)
+    scheduler.request_render(volume=True, slices=True)
+    assert scheduler.consume_ready(now=0.02) == (False, False)
+    assert scheduler.consume_ready(now=0.04) == (True, False)
+    assert scheduler.consume_ready(now=0.10) == (False, True)
