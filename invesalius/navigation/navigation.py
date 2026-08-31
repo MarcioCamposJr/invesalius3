@@ -254,12 +254,13 @@ class UpdateNavigationScene(threading.Thread):
                         "From Neuronavigation: Send coil pose",
                         coord=list(coords[main_coil]),
                     )
-                    Publisher.sendMessage(
-                        "Update object arrow matrix",
-                        m_img=m_imgs[main_coil],
-                        coord=coords[main_coil],
-                        flag=self.peel_loaded,
-                    )
+                    if self.peel_loaded:
+                        Publisher.sendMessage(
+                            "Update object arrow matrix",
+                            m_img=m_imgs[main_coil],
+                            coord=coords[main_coil],
+                            flag=True,
+                        )
 
                     if self.e_field_loaded:
                         Publisher.sendMessage(
