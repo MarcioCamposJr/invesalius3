@@ -50,6 +50,8 @@ from invesalius.net.pedal_connection import PedalConnector
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import Singleton
 
+NAVIGATION_TIMING_TOLERANCE = 1e-9
+
 
 class NavigationHub(metaclass=Singleton):
     """
@@ -113,7 +115,7 @@ class QueueCustom(queue.Queue):
 
 
 class NavigationRenderScheduler:
-    def __init__(self, volume_fps=60.0, slice_fps=10.0):
+    def __init__(self, volume_fps=100.0, slice_fps=10.0):
         self._volume_interval = 1.0 / volume_fps
         self._slice_interval = 1.0 / slice_fps
         self._last_volume_render = float("-inf")
@@ -130,9 +132,14 @@ class NavigationRenderScheduler:
             now = time.monotonic()
 
         volume_ready = (
-            self._volume_pending and now - self._last_volume_render >= self._volume_interval
+            self._volume_pending
+            and now - self._last_volume_render
+            >= self._volume_interval - NAVIGATION_TIMING_TOLERANCE
         )
-        slices_ready = self._slice_pending and now - self._last_slice_render >= self._slice_interval
+        slices_ready = (
+            self._slice_pending
+            and now - self._last_slice_render >= self._slice_interval - NAVIGATION_TIMING_TOLERANCE
+        )
 
         if volume_ready:
             self._volume_pending = False
@@ -182,7 +189,9 @@ class UpdateNavigationScene(threading.Thread):
         self.neuronavigation_api = neuronavigation_api
         self.navigation = Navigation()
         self._pose_update_interval = max(self.sle, 1.0 / 100.0)
-        self._render_scheduler = NavigationRenderScheduler()
+        self._render_scheduler = NavigationRenderScheduler(
+            volume_fps=1.0 / self._pose_update_interval
+        )
         self._loop_sleep = max(self.sle, 1.0 / 120.0)
         self._last_pose_update = 0.0
         self._last_dispatch = 0.0
@@ -335,7 +344,10 @@ class UpdateNavigationScene(threading.Thread):
                     self.serial_port_queue.task_done()
 
             now = time.monotonic()
-            update_pose = now - self._last_pose_update >= self._pose_update_interval
+            update_pose = (
+                now - self._last_pose_update
+                >= self._pose_update_interval - NAVIGATION_TIMING_TOLERANCE
+            )
             enorm_data = None
             if update_pose and coil_visible and self.e_field_loaded:
                 try:
