@@ -571,8 +571,6 @@ def DebugCoordRandom(tracker_connection: "TrackerConnection", tracker_id: int, r
             )
         )
 
-    sleep(0.15)
-
     # Always make the markers visible when using debug tracker; this enables registration, as it
     # is not possible to registering without markers.
     marker_visibilities = [True] * (2 + n_coils)

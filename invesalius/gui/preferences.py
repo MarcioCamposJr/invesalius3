@@ -577,7 +577,7 @@ class NavigationTab(wx.Panel):
         self.sleep_coord = ctrl.GetValue()
         Publisher.sendMessage("Update coord sleep", data=self.sleep_coord)
 
-        self.session.SetConfig("sleep_coord", self.sleep_nav)
+        self.session.SetConfig("sleep_coord", self.sleep_coord)
 
     def LoadConfig(self):
         sleep_nav = self.session.GetConfig("sleep_nav")
