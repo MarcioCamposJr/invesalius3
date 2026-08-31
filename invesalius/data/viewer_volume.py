@@ -291,6 +291,8 @@ class Viewer(wx.Panel):
         self.target_mode = False
         self._target_camera_last_update = 0.0
         self._target_camera_update_interval = 1.0 / 20.0
+        self._target_camera_base_parallel_scale = None
+        self._target_camera_base_view_angle = None
         self._target_guide_last_update = 0.0
         self._target_guide_update_interval = 1.0 / 20.0
         self._target_guide_deadband = 2.0
@@ -1348,7 +1350,9 @@ class Viewer(wx.Panel):
 
         self.ren.ResetCamera()
         self.SetCameraTarget()
-        # self.ren.GetActiveCamera().Zoom(4)
+        camera = self.ren.GetActiveCamera()
+        self._target_camera_base_parallel_scale = camera.GetParallelScale()
+        self._target_camera_base_view_angle = camera.GetViewAngle()
 
         self.target_guide_renderer.ResetCamera()
         self.target_guide_renderer.GetActiveCamera().Zoom(2)
@@ -1384,6 +1388,8 @@ class Viewer(wx.Panel):
             self.ren.RemoveActor(self.robot_warnings_text.actor)
 
         self.camera_show_object = None
+        self._target_camera_base_parallel_scale = None
+        self._target_camera_base_view_angle = None
         self._target_guide_last_signature = None
         if self.actor_peel:
             if self.object_orientation_torus_actor:
@@ -1420,12 +1426,7 @@ class Viewer(wx.Panel):
                 self.distance_text.SetValue(formatted_distance)
 
             if now - self._target_camera_last_update >= self._target_camera_update_interval:
-                self.ren.ResetCamera()
-                self.SetCameraTarget()
-                zoom_distance = min(distance_to_target, 100)
-                # ((-0.0404*dst) + 5.0404) is the linear equation to normalize the zoom between 1 and 5 times with
-                # the distance between 1 and 100 mm
-                self.ren.GetActiveCamera().Zoom((-0.0404 * zoom_distance) + 5.0404)
+                self._UpdateTargetCameraZoom(distance_to_target)
                 self._target_camera_last_update = now
 
             is_under_distance_threshold = distance_to_target <= self.distance_threshold
@@ -1548,6 +1549,18 @@ class Viewer(wx.Panel):
 
                 self._target_guide_last_signature = guide_signature
                 self._target_guide_last_update = now
+
+    def _UpdateTargetCameraZoom(self, distance_to_target):
+        zoom_distance = min(distance_to_target, 100)
+        # Linear normalization: approximately 5x at 1 mm and 1x at 100 mm.
+        zoom = (-0.0404 * zoom_distance) + 5.0404
+        camera = self.ren.GetActiveCamera()
+
+        if camera.GetParallelProjection():
+            if self._target_camera_base_parallel_scale is not None:
+                camera.SetParallelScale(self._target_camera_base_parallel_scale / zoom)
+        elif self._target_camera_base_view_angle is not None:
+            camera.SetViewAngle(self._target_camera_base_view_angle / zoom)
 
     def OnUnsetTarget(self, marker):
         self.DisableTargetMode()
