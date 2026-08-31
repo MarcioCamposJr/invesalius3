@@ -1253,6 +1253,22 @@ class Viewer(wx.Panel):
                 arrow_pitch_x2,
             )
 
+        for actor in self.guide_coil_actors:
+            actor.GetProperty().SetColor(1, 1, 1)
+
+        initial_arrow_positions = (
+            ([-50, -35, 12], [-50, -35, 50]),
+            ([50, -35, 0], [50, -35, -50]),
+            ([-50, -35, 0], [-50, 5, 0]),
+            ([50, -35, 0], [50, -75, 0]),
+            ([0, 65, 38], [0, 65, 68]),
+            ([0, -55, 5], [0, -55, -30]),
+        )
+        for actor, (start_point, end_point) in zip(
+            self.guide_arrow_actors, initial_arrow_positions
+        ):
+            self._UpdateTargetGuideArrow(actor, start_point, end_point)
+
         for actor in (*self.guide_coil_actors, *self.guide_arrow_actors):
             self.target_guide_renderer.AddActor(actor)
 
