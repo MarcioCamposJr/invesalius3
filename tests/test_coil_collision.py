@@ -6,6 +6,7 @@ from invesalius.navigation.coil_collision import (
     CoilCollisionCalculator,
     OrientedBoundingBox,
     coil_box_from_registration,
+    direction_from_tracker_to_robot,
     measure_obb_distance,
 )
 
@@ -190,3 +191,26 @@ def test_calculator_rejects_missing_tracker_pose():
 
     with pytest.raises(ValueError):
         calculator.measure(np.zeros((3, 6)))
+
+
+def test_transforms_brake_direction_to_robot_base():
+    tracker_to_robot = np.eye(4)
+    tracker_to_robot[:3, :3] = Rotation.from_euler("z", 90, degrees=True).as_matrix()
+
+    result = direction_from_tracker_to_robot([1, 0, 0], tracker_to_robot)
+
+    np.testing.assert_allclose(result, [0, 1, 0], atol=1e-12)
+
+
+def test_uses_affine_part_of_serialized_robot_registration():
+    serialized = np.vstack((np.zeros((8, 4)), np.eye(4)))
+    serialized[8:11, :3] = Rotation.from_euler("z", 90, degrees=True).as_matrix()
+
+    result = direction_from_tracker_to_robot([1, 0, 0], serialized)
+
+    np.testing.assert_allclose(result, [0, 1, 0], atol=1e-12)
+
+
+def test_rejects_invalid_tracker_to_robot_matrix():
+    with pytest.raises(ValueError):
+        direction_from_tracker_to_robot([1, 0, 0], np.eye(3))

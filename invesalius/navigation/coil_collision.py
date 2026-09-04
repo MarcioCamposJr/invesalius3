@@ -198,3 +198,33 @@ def measure_obb_distance(
         brake_direction_a=direction_a,
         brake_direction_b=direction_b,
     )
+
+
+def direction_from_tracker_to_robot(direction, tracker_to_robot) -> np.ndarray:
+    """Transform a direction from tracker space to a robot BASE coordinate system."""
+
+    direction = np.asarray(direction, dtype=float)
+    matrix = np.asarray(tracker_to_robot, dtype=float)
+    if direction.shape != (3,) or not np.all(np.isfinite(direction)):
+        raise ValueError("Brake direction must contain three finite values")
+
+    try:
+        matrix = matrix.reshape(-1, 4)
+    except ValueError as error:
+        raise ValueError("Tracker-to-robot matrix has an invalid shape") from error
+
+    if matrix.shape == (12, 4):
+        # Robot registration serializes X_est, Y_est, and the affine
+        # tracker-to-robot matrix vertically. Only the final matrix maps the
+        # brake direction to the robot BASE coordinate system.
+        matrix = matrix[8:12]
+    elif matrix.shape != (4, 4):
+        raise ValueError("Tracker-to-robot matrix must have shape (4, 4) or (12, 4)")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("Tracker-to-robot matrix values must be finite")
+
+    transformed = matrix[:3, :3] @ direction
+    norm = np.linalg.norm(transformed)
+    if norm <= 1e-9:
+        return np.zeros(3, dtype=float)
+    return transformed / norm
