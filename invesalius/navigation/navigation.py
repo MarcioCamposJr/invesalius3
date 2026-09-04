@@ -762,9 +762,16 @@ class Navigation(metaclass=Singleton):
                 jobs.start()
                 # del jobs
 
+            if self.n_coils > 1 and not Robots().StartCoilCollisionMonitoring():
+                print(
+                    "Coil collision monitoring was not started. "
+                    "Check robot-to-coil assignments and coil registrations."
+                )
+
             self.pedal_connector.add_callback("navigation", self.PedalStateChanged)
 
     def StopNavigation(self):
+        Robots().StopCoilCollisionMonitoring()
         self.event.set()
 
         self.pedal_connector.remove_callback("navigation")
