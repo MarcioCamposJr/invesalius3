@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -108,6 +109,85 @@ class CoilCollisionCalculator:
             coil_b=self._coils[1][0],
             measurement=measurement,
         )
+
+
+class CoilCollisionMonitor:
+    """Sample both coils in one restartable background worker."""
+
+    def __init__(self, calculator, sample_provider, result_callback, interval=0.05):
+        if not callable(sample_provider) or not callable(result_callback):
+            raise ValueError("Collision monitor provider and callback must be callable")
+        if not np.isfinite(interval) or interval <= 0:
+            raise ValueError("Collision monitor interval must be positive")
+
+        self.calculator = calculator
+        self.sample_provider = sample_provider
+        self.result_callback = result_callback
+        self.interval = float(interval)
+        self.last_error = None
+        self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
+        self._thread = None
+
+    @property
+    def is_running(self):
+        with self._state_lock:
+            return self._thread is not None and self._thread.is_alive()
+
+    def start(self):
+        with self._state_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return False
+
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="coil-collision-monitor",
+                daemon=True,
+            )
+            self._thread.start()
+            return True
+
+    def stop(self, timeout=2.0):
+        with self._state_lock:
+            thread = self._thread
+            self._stop_event.set()
+
+        if thread is None:
+            return True
+        thread.join(timeout=timeout)
+
+        stopped = not thread.is_alive()
+        if stopped:
+            with self._state_lock:
+                if self._thread is thread:
+                    self._thread = None
+        return stopped
+
+    def process_once(self):
+        tracker_coordinates, visibilities = self.sample_provider()
+        for object_id in self.calculator.object_ids:
+            try:
+                visible = bool(visibilities[object_id])
+            except (IndexError, TypeError) as error:
+                raise ValueError("Coil tracker visibility is unavailable") from error
+            if not visible:
+                return None
+
+        result = self.calculator.measure(tracker_coordinates)
+        self.result_callback(result)
+        self.last_error = None
+        return result
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                self.process_once()
+            except (IndexError, TypeError, ValueError, RuntimeError) as error:
+                # Invalid/missing samples are intentionally not published. Once
+                # activated, the robot-side watchdog will stop on stale data.
+                self.last_error = error
+            self._stop_event.wait(self.interval)
 
 
 def coil_box_from_registration(

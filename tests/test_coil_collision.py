@@ -1,9 +1,12 @@
+from threading import Event
+
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
 from invesalius.navigation.coil_collision import (
     CoilCollisionCalculator,
+    CoilCollisionMonitor,
     OrientedBoundingBox,
     coil_box_from_registration,
     direction_from_tracker_to_robot,
@@ -214,3 +217,55 @@ def test_uses_affine_part_of_serialized_robot_registration():
 def test_rejects_invalid_tracker_to_robot_matrix():
     with pytest.raises(ValueError):
         direction_from_tracker_to_robot([1, 0, 0], np.eye(3))
+
+
+def make_monitor(visible=True, callback=None):
+    calculator = CoilCollisionCalculator(
+        {"coil-a": make_registration(0), "coil-b": make_registration(1)},
+        half_thickness=1,
+    )
+    coordinates = np.zeros((2, 6))
+    coordinates[1, 0] = 3
+    visibilities = [visible, visible]
+    return CoilCollisionMonitor(
+        calculator,
+        sample_provider=lambda: (coordinates, visibilities),
+        result_callback=callback or (lambda result: None),
+        interval=0.01,
+    )
+
+
+def test_monitor_processes_one_visible_sample():
+    results = []
+    monitor = make_monitor(callback=results.append)
+
+    result = monitor.process_once()
+
+    assert result is results[0]
+    assert result.measurement.distance == pytest.approx(1)
+
+
+def test_monitor_does_not_publish_invisible_coils():
+    results = []
+    monitor = make_monitor(visible=False, callback=results.append)
+
+    result = monitor.process_once()
+
+    assert result is None
+    assert results == []
+
+
+def test_monitor_start_is_idempotent_and_worker_is_restartable():
+    result_received = Event()
+    monitor = make_monitor(callback=lambda result: result_received.set())
+
+    assert monitor.start()
+    assert not monitor.start()
+    assert result_received.wait(timeout=1)
+    assert monitor.stop()
+    assert not monitor.is_running
+
+    result_received.clear()
+    assert monitor.start()
+    assert result_received.wait(timeout=1)
+    assert monitor.stop()
