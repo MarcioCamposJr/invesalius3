@@ -430,6 +430,10 @@ class Robot:
             "Neuronavigation to Robot: Reset errors",
             robot_id=self.robot_id,
         )
+        Publisher.sendMessage(
+            "Neuronavigation to Robot: Reset collision error",
+            robot_id=self.robot_id,
+        )
 
     def UpdateDisplacementToTarget(self, displacement):
         wx.CallAfter(
