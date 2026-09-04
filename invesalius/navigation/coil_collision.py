@@ -2,6 +2,9 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.optimize import lsq_linear
+from scipy.spatial.transform import Rotation
+
+DEFAULT_COIL_HALF_THICKNESS_MM = 7.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,56 @@ class CoilCollisionMeasurement:
     closest_point_b: np.ndarray
     brake_direction_a: np.ndarray
     brake_direction_b: np.ndarray
+
+
+def coil_box_from_registration(
+    registration, half_thickness=DEFAULT_COIL_HALF_THICKNESS_MM
+) -> OrientedBoundingBox:
+    """Build a marker-local coil OBB from an InVesalius coil registration."""
+
+    if not np.isfinite(half_thickness) or half_thickness <= 0:
+        raise ValueError("Coil half-thickness must be a positive finite value")
+    if not isinstance(registration, dict):
+        raise ValueError("Coil registration must be a dictionary")
+
+    try:
+        fiducials = np.asarray(registration["fiducials"], dtype=float)
+        orientations = np.asarray(registration["orientations"], dtype=float)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Coil registration has invalid fiducials or orientations") from error
+
+    if fiducials.ndim != 2 or fiducials.shape[0] < 4 or fiducials.shape[1] < 3:
+        raise ValueError("Coil registration must contain four 3D fiducials")
+    if orientations.ndim != 2 or orientations.shape[0] < 4 or orientations.shape[1] < 3:
+        raise ValueError("Coil registration must contain four orientations")
+    if not np.all(np.isfinite(fiducials)) or not np.all(np.isfinite(orientations)):
+        raise ValueError("Coil registration values must be finite")
+
+    left, right, anterior, marker_position = fiducials[:4, :3]
+    marker_orientation = orientations[3, :3]
+    center = (left + right) / 2
+    half_width = (right - left) / 2
+    half_depth = anterior - center
+
+    normal = np.cross(half_width, half_depth)
+    normal_norm = np.linalg.norm(normal)
+    if normal_norm <= 1e-9:
+        raise ValueError("Coil registration fiducials must not be collinear")
+    half_normal = normal / normal_norm * half_thickness
+
+    marker_to_tracker = Rotation.from_euler("ZYX", marker_orientation, degrees=True).as_matrix()
+    tracker_to_marker = marker_to_tracker.T
+
+    return OrientedBoundingBox(
+        center=tracker_to_marker @ (center - marker_position),
+        half_axes=np.array(
+            [
+                tracker_to_marker @ half_width,
+                tracker_to_marker @ half_depth,
+                tracker_to_marker @ half_normal,
+            ]
+        ),
+    )
 
 
 def measure_obb_distance(

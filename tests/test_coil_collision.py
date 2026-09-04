@@ -4,6 +4,7 @@ from scipy.spatial.transform import Rotation
 
 from invesalius.navigation.coil_collision import (
     OrientedBoundingBox,
+    coil_box_from_registration,
     measure_obb_distance,
 )
 
@@ -73,3 +74,56 @@ def test_transforms_local_box_to_world_coordinates():
 def test_rejects_degenerate_box():
     with pytest.raises(ValueError):
         OrientedBoundingBox(np.zeros(3), np.zeros((3, 3)))
+
+
+def test_builds_marker_local_box_from_coil_registration():
+    registration = {
+        "fiducials": [
+            [-20, 0, 0],
+            [20, 0, 0],
+            [0, 30, 0],
+            [10, 20, 30],
+        ],
+        "orientations": [[0, 0, 0]] * 4,
+    }
+
+    box = coil_box_from_registration(registration, half_thickness=5)
+
+    np.testing.assert_allclose(box.center, [-10, -20, -30])
+    np.testing.assert_allclose(box.half_axes, [[20, 0, 0], [0, 30, 0], [0, 0, 5]])
+
+
+def test_reconstructs_registered_box_at_initial_marker_pose():
+    registration = {
+        "fiducials": [
+            [10, 18, 30],
+            [10, 22, 30],
+            [7, 20, 30],
+            [10, 20, 30],
+        ],
+        "orientations": [[0, 0, 0]] * 3 + [[90, 0, 0]],
+    }
+    local_box = coil_box_from_registration(registration, half_thickness=1)
+    marker_rotation = Rotation.from_euler("ZYX", [90, 0, 0], degrees=True).as_matrix()
+
+    reconstructed = local_box.transformed([10, 20, 30], marker_rotation)
+
+    np.testing.assert_allclose(reconstructed.center, [10, 20, 30], atol=1e-12)
+    np.testing.assert_allclose(reconstructed.half_axes[0], [0, 2, 0], atol=1e-12)
+    np.testing.assert_allclose(reconstructed.half_axes[1], [-3, 0, 0], atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "registration",
+    [
+        {},
+        {"fiducials": [], "orientations": []},
+        {
+            "fiducials": [[0, 0, 0]] * 4,
+            "orientations": [[0, 0, 0]] * 4,
+        },
+    ],
+)
+def test_rejects_invalid_coil_registration(registration):
+    with pytest.raises(ValueError):
+        coil_box_from_registration(registration)
