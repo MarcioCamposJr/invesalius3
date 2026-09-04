@@ -27,6 +27,11 @@ import invesalius.data.coregistration as dcr
 import invesalius.gui.dialogs as dlg
 import invesalius.session as ses
 from invesalius.i18n import tr as _
+from invesalius.navigation.coil_collision import (
+    CoilCollisionCalculator,
+    CoilCollisionMonitor,
+    direction_from_tracker_to_robot,
+)
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import Singleton
 
@@ -454,6 +459,8 @@ class Robots(metaclass=Singleton):
         self.robots_by_coil = {}
         self.n_robots_created = 0
         self.main_coil_name = None
+        self._collision_monitor = None
+        self._collision_monitoring_active = False
 
         self.LoadConfig()
 
@@ -518,3 +525,77 @@ class Robots(metaclass=Singleton):
     def SendTargetToAll(self):
         for robot in self.robots_by_id.values():
             robot.SendTargetToRobot()
+
+    def StartCoilCollisionMonitoring(self):
+        if self._collision_monitor is not None and self._collision_monitor.is_running:
+            return True
+
+        assignments = {
+            coil_name: robot
+            for coil_name, robot in self.robots_by_coil.items()
+            if coil_name in robot.navigation.coil_registrations
+        }
+        if len(assignments) != 2:
+            return False
+
+        first_robot = next(iter(assignments.values()))
+        registrations = {
+            coil_name: first_robot.navigation.coil_registrations[coil_name]
+            for coil_name in assignments
+        }
+        try:
+            calculator = CoilCollisionCalculator(registrations)
+        except ValueError as error:
+            print(f"Unable to start coil collision monitoring: {error}")
+            return False
+
+        self._collision_monitor = CoilCollisionMonitor(
+            calculator=calculator,
+            sample_provider=first_robot.tracker.TrackerCoordinates.GetCoordinates,
+            result_callback=self._queue_coil_collision_measurement,
+        )
+        self._collision_monitoring_active = True
+        return self._collision_monitor.start()
+
+    def StopCoilCollisionMonitoring(self):
+        self._collision_monitoring_active = False
+        if self._collision_monitor is None:
+            return True
+
+        stopped = self._collision_monitor.stop()
+        if stopped:
+            self._collision_monitor = None
+        return stopped
+
+    def _queue_coil_collision_measurement(self, result):
+        wx.CallAfter(self._publish_coil_collision_measurement, result)
+
+    def _publish_coil_collision_measurement(self, result):
+        if not self._collision_monitoring_active:
+            return
+
+        directions = {
+            result.coil_a: result.measurement.brake_direction_a,
+            result.coil_b: result.measurement.brake_direction_b,
+        }
+        for coil_name, direction in directions.items():
+            robot = self.robots_by_coil.get(coil_name)
+            if robot is None or not robot.IsConnected():
+                continue
+            if robot.matrix_tracker_to_robot is None:
+                continue
+
+            try:
+                direction_in_robot_base = direction_from_tracker_to_robot(
+                    direction, robot.matrix_tracker_to_robot
+                )
+            except ValueError as error:
+                print(f"Unable to publish collision data for robot {robot.robot_id}: {error}")
+                continue
+
+            Publisher.sendMessage(
+                "Neuronavigation to Robot: Dynamically update distance coils",
+                distance=result.measurement.distance,
+                brake_vector=direction_in_robot_base.tolist(),
+                robot_id=robot.robot_id,
+            )
