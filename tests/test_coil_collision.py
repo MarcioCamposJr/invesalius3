@@ -3,6 +3,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from invesalius.navigation.coil_collision import (
+    CoilCollisionCalculator,
     OrientedBoundingBox,
     coil_box_from_registration,
     measure_obb_distance,
@@ -127,3 +128,65 @@ def test_reconstructs_registered_box_at_initial_marker_pose():
 def test_rejects_invalid_coil_registration(registration):
     with pytest.raises(ValueError):
         coil_box_from_registration(registration)
+
+
+def make_registration(object_id):
+    return {
+        "obj_id": object_id,
+        "fiducials": [
+            [-1, 0, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 0],
+        ],
+        "orientations": [[0, 0, 0]] * 4,
+    }
+
+
+def test_calculator_uses_registered_tracker_object_ids():
+    calculator = CoilCollisionCalculator(
+        {"coil-a": make_registration(4), "coil-b": make_registration(2)},
+        half_thickness=1,
+    )
+    coordinates = np.zeros((5, 6))
+    coordinates[2, 0] = 3
+
+    result = calculator.measure(coordinates)
+
+    assert calculator.object_ids == (4, 2)
+    assert result.coil_a == "coil-a"
+    assert result.coil_b == "coil-b"
+    assert result.measurement.distance == pytest.approx(1)
+    np.testing.assert_allclose(result.measurement.brake_direction_a, [-1, 0, 0])
+    np.testing.assert_allclose(result.measurement.brake_direction_b, [1, 0, 0])
+
+
+def test_calculator_applies_current_tracker_rotation():
+    registration_a = make_registration(0)
+    registration_a["fiducials"][2] = [0, 2, 0]
+    calculator = CoilCollisionCalculator(
+        {"coil-a": registration_a, "coil-b": make_registration(1)},
+        half_thickness=1,
+    )
+    coordinates = np.zeros((2, 6))
+    coordinates[0, 3] = 90
+    coordinates[1, 0] = 4
+
+    result = calculator.measure(coordinates)
+
+    # Coil A's 2 mm half-depth rotates onto world X.
+    assert result.measurement.distance == pytest.approx(1)
+
+
+def test_calculator_rejects_duplicate_tracker_object_ids():
+    with pytest.raises(ValueError):
+        CoilCollisionCalculator({"coil-a": make_registration(2), "coil-b": make_registration(2)})
+
+
+def test_calculator_rejects_missing_tracker_pose():
+    calculator = CoilCollisionCalculator(
+        {"coil-a": make_registration(2), "coil-b": make_registration(4)}
+    )
+
+    with pytest.raises(ValueError):
+        calculator.measure(np.zeros((3, 6)))

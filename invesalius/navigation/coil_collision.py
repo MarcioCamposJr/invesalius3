@@ -53,6 +53,63 @@ class CoilCollisionMeasurement:
     brake_direction_b: np.ndarray
 
 
+@dataclass(frozen=True)
+class NamedCoilCollisionMeasurement:
+    coil_a: str
+    coil_b: str
+    measurement: CoilCollisionMeasurement
+
+
+class CoilCollisionCalculator:
+    """Calculate collision data for two registered tracker coils."""
+
+    def __init__(self, registrations, half_thickness=DEFAULT_COIL_HALF_THICKNESS_MM):
+        if not isinstance(registrations, dict) or len(registrations) != 2:
+            raise ValueError("Collision calculation requires exactly two coils")
+
+        self._coils = []
+        object_ids = set()
+        for coil_name, registration in registrations.items():
+            object_id = registration.get("obj_id")
+            if not isinstance(object_id, int) or object_id < 0:
+                raise ValueError(f"Coil {coil_name} has an invalid tracker object ID")
+            if object_id in object_ids:
+                raise ValueError("Collision coils must use distinct tracker object IDs")
+            object_ids.add(object_id)
+            self._coils.append(
+                (
+                    coil_name,
+                    object_id,
+                    coil_box_from_registration(registration, half_thickness),
+                )
+            )
+
+    @property
+    def object_ids(self):
+        return tuple(coil[1] for coil in self._coils)
+
+    def measure(self, tracker_coordinates) -> NamedCoilCollisionMeasurement:
+        world_boxes = []
+        for coil_name, object_id, local_box in self._coils:
+            try:
+                pose = np.asarray(tracker_coordinates[object_id], dtype=float)
+            except (IndexError, TypeError, ValueError) as error:
+                raise ValueError(f"Tracker pose for coil {coil_name} is unavailable") from error
+
+            if pose.ndim != 1 or pose.size < 6 or not np.all(np.isfinite(pose[:6])):
+                raise ValueError(f"Tracker pose for coil {coil_name} is invalid")
+
+            rotation = Rotation.from_euler("ZYX", pose[3:6], degrees=True).as_matrix()
+            world_boxes.append(local_box.transformed(pose[:3], rotation))
+
+        measurement = measure_obb_distance(world_boxes[0], world_boxes[1])
+        return NamedCoilCollisionMeasurement(
+            coil_a=self._coils[0][0],
+            coil_b=self._coils[1][0],
+            measurement=measurement,
+        )
+
+
 def coil_box_from_registration(
     registration, half_thickness=DEFAULT_COIL_HALF_THICKNESS_MM
 ) -> OrientedBoundingBox:
