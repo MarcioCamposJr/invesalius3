@@ -534,19 +534,17 @@ class Robots(metaclass=Singleton):
         if self._collision_monitor is not None and self._collision_monitor.is_running:
             return True
 
-        assignments = {
-            coil_name: robot
-            for coil_name, robot in self.robots_by_coil.items()
-            if coil_name in robot.navigation.coil_registrations
-        }
-        if len(assignments) != 2:
+        first_robot = next(iter(self.robots_by_id.values()), None)
+        if first_robot is None:
             return False
 
-        first_robot = next(iter(assignments.values()))
-        registrations = {
-            coil_name: first_robot.navigation.coil_registrations[coil_name]
-            for coil_name in assignments
-        }
+        # Both tracked coils are collision geometry, even when only one is
+        # robotized. Association is only needed later to route each brake
+        # direction to the robot that controls that coil.
+        registrations = first_robot.navigation.coil_registrations
+        if len(registrations) != 2:
+            return False
+
         try:
             calculator = CoilCollisionCalculator(registrations)
         except ValueError as error:
