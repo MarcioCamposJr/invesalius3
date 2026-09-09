@@ -22,6 +22,7 @@ import time
 
 import numpy as np
 import wx
+from imageio import imsave
 from vtk import vtkCommand
 
 # TODO: Check that these imports are not used -- vtkLookupTable, vtkMinimalStandardRandomSequence, vtkPoints, vtkUnsignedCharArray
@@ -38,17 +39,23 @@ from vtkmodules.vtkRenderingAnnotation import vtkAnnotatedCubeActor
 from vtkmodules.vtkRenderingCore import (
     vtkActor,
     vtkAssembly,
+    vtkPointPicker,
     vtkPolyDataMapper,
     vtkProperty,
+    vtkPropPicker,
+    vtkRenderer,
 )
+from vtkmodules.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteractor
 
 import invesalius.constants as const
 import invesalius.data.styles_3d as styles
+import invesalius.data.vtk_utils as vtku
 import invesalius.project as prj
 import invesalius.session as ses
+import invesalius.style as st
 from invesalius.data.ruler_volume import GenericLeftRulerVolume
+from invesalius.gui.widgets.canvas_renderer import CanvasRendererCTX
 from invesalius.i18n import tr as _
-from invesalius.math_utils import inner1d
 from invesalius.pubsub import pub as Publisher
 
 if sys.platform == "win32":
@@ -69,7 +76,225 @@ PROP_MEASURE = 0.8
 
 
 class Base3DView(wx.Panel):
-    """Shared rendering, anatomy, camera and interaction operations for 3D views."""
+    """Common anatomy, rendering and interaction infrastructure for 3D views.
+
+    Specialized initialization hooks keep the legacy construction order.
+    The application still creates a single compatibility viewer.
+    """
+
+    def __init__(self, parent):
+        display_size = wx.GetDisplaySize()
+        # Set the initial volume wx.Panel size as half the screen resolution to fix the issue
+        # with small target guide icons when loading a state file with target selected
+        x = int(display_size[0] / 2)
+        y = int(display_size[1] / 2)
+        wx.Panel.__init__(self, parent, size=wx.Size(x, y))
+        self.SetBackgroundColour(wx.Colour(0, 0, 0))
+
+        self.interaction_style = st.StyleStateManager()
+
+        self.initial_focus = None
+
+        self._initialize_navigation_data()
+
+        self.style = None
+        self._initialize_sensor_data()
+
+        interactor = wxVTKRenderWindowInteractor(self, -1, size=self.GetSize())
+        self.interactor = interactor
+        self.interactor.SetRenderWhenDisabled(True)
+
+        self._fps_last_time = time.monotonic()
+        self._fps_frames = 0
+        self.fps_text = vtku.Text()
+        self.fps_text.SetSize(const.TEXT_SIZE_SMALL)
+        self.fps_text.SetPosition(
+            (const.TEXT_POS_LEFT_UP[0], min(0.995, const.TEXT_POS_LEFT_UP[1] + 0.02))
+        )
+        self.fps_text.SetValue("FPS: --")
+        self._fps_text_visible = True
+        self.nav_status = False
+
+        self.enable_style(const.STATE_DEFAULT)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(interactor, 1, wx.EXPAND)
+        self.sizer = sizer
+        self.SetSizer(sizer)
+        self.Layout()
+
+        # It would be more correct (API-wise) to call interactor.Initialize() and
+        # interactor.Start() here, but Initialize() calls RenderWindow.Render().
+        # That Render() call will get through before we can setup the
+        # RenderWindow() to render via the wxWidgets-created context; this
+        # causes flashing on some platforms and downright breaks things on
+        # other platforms.  Instead, we call widget.Enable().  This means
+        # that the RWI::Initialized ivar is not set, but in THIS SPECIFIC CASE,
+        # that doesn't matter.
+        interactor.Enable(1)
+
+        ren = vtkRenderer()
+        self.ren = ren
+
+        self._create_navigation_renderer()
+
+        canvas_renderer = vtkRenderer()
+        canvas_renderer.SetLayer(1)
+        canvas_renderer.SetInteractive(0)
+        canvas_renderer.PreserveDepthBufferOn()
+        self.canvas_renderer = canvas_renderer
+
+        interactor.GetRenderWindow().SetNumberOfLayers(2)
+        interactor.GetRenderWindow().AddRenderer(ren)
+        interactor.GetRenderWindow().AddRenderer(canvas_renderer)
+
+        self.raycasting_volume = False
+
+        self.onclick = False
+
+        self.text = vtku.TextZero()
+        self.text.SetValue("")
+        self.text.SetPosition(const.TEXT_POS_LEFT_UP)
+        if sys.platform == "darwin":
+            font_size = const.TEXT_SIZE_LARGE * self.GetContentScaleFactor()
+            self.text.SetSize(int(round(font_size, 0)))
+        self.ren.AddActor(self.text.actor)
+
+        self.ren.AddActor(self.fps_text.actor)
+        self.fps_text.Hide()
+
+        #  self.polygon = Polygon(None, is_3d=False)
+
+        # Enable canvas for ruler to be drawn
+        self.canvas = CanvasRendererCTX(self, self.ren, self.canvas_renderer)
+        self.prev_view_port_height = None
+        self.ruler = None
+        self.orientation_widget = None  # VTK orientation cube widget
+
+        self.slice_plane = None
+
+        self.view_angle = None
+
+        self._bind_events()
+        self.__bind_events_wx()
+
+        self.mouse_pressed = 0
+        self.on_wl = False
+
+        self.picker = vtkPointPicker()
+        interactor.SetPicker(self.picker)
+        self.seed_points = []
+
+        self.points_reference = []
+
+        self.measure_picker = vtkPropPicker()
+        # self.measure_picker.SetTolerance(0.005)
+        self.measures = []
+
+        self.repositioned_axial_plan = 0
+        self.repositioned_sagital_plan = 0
+        self.repositioned_coronal_plan = 0
+        self.surface_added = False
+
+        self.use_volumetric_camera = False
+        self.camera_show_object = None
+
+        # Pointer is the ball that is shown to indicate the 3D point in the volume viewer that corresponds to the
+        # selected slice positions. The same pointer is also used to show the point selected from the 3D viewer by
+        # right-clicking on it.
+        self.pointer_actor = None
+
+        # A dict to store the current camera settings; used when enabling target mode to store the current
+        # camera. When disabling target mode, the stored camera settings are used to restore the camera.
+        self.stored_camera_settings = None
+
+        self._initialize_navigation_state()
+
+        self.surface = None
+
+        self._initialize_navigation_visualizers()
+
+        # SSAO state tracking
+        self.ssao_enabled = False
+        self.ssao_pass = None
+        self.ssao_before_measurement = False  # Track SSAO state before entering measurement mode
+
+        # self.renderers = (self.target_guide_renderer, ren, canvas_renderer)
+
+        renwin = interactor.GetRenderWindow().GetRenderers()
+        renwin.InitTraversal()
+
+        self.renderers = []
+        for i in range(renwin.GetNumberOfItems()):
+            renderer = renwin.GetNextItem()
+            self.renderers.append(renderer)
+
+        print(len(self.renderers))
+
+        self._initialize_navigation_ui()
+        self._update_fps_visibility()
+        # Request the orientation cube visibility status with a small delay
+        # to ensure the interactor has time to initialize during app startup.
+        wx.CallLater(1000, Publisher.sendMessage, "Send orientation cube visibility status")
+
+    def _initialize_navigation_data(self):
+        pass
+
+    def _initialize_sensor_data(self):
+        pass
+
+    def _create_navigation_renderer(self):
+        self.target_guide_renderer = None
+
+    def _initialize_navigation_state(self):
+        self.target_mode = False
+
+    def _initialize_navigation_visualizers(self):
+        pass
+
+    def _initialize_navigation_ui(self):
+        pass
+
+    def _bind_events(self):
+        Publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
+        Publisher.subscribe(self.RemoveSurface, "Remove surface actor from viewer")
+        Publisher.subscribe(self.UpdateRender, "Render volume viewer")
+        Publisher.subscribe(self.ChangeBackgroundColour, "Change volume viewer background colour")
+        Publisher.subscribe(self.LoadVolume, "Load volume into viewer")
+        Publisher.subscribe(self.UnloadVolume, "Unload volume")
+        Publisher.subscribe(self.OnSetWindowLevelText, "Set volume window and level text")
+        Publisher.subscribe(self.OnHideRaycasting, "Hide raycasting volume")
+        Publisher.subscribe(self.OnShowRaycasting, "Update raycasting preset")
+        Publisher.subscribe(self.AppendActor, "AppendActor")
+        Publisher.subscribe(self.SetWidgetInteractor, "Set Widget Interactor")
+        Publisher.subscribe(self.OnSetViewAngle, "Set volume view angle")
+        Publisher.subscribe(
+            self.OnDisableBrightContrast, "Set interaction mode " + str(const.MODE_SLICE_EDITOR)
+        )
+        Publisher.subscribe(self.LoadSlicePlane, "Load slice plane")
+        Publisher.subscribe(self.ResetCamClippingRange, "Reset cam clipping range")
+        Publisher.subscribe(self.SendActiveCamera, "Send volume viewer active camera")
+        Publisher.subscribe(self.SendViewerSize, "Send volume viewer size")
+        Publisher.subscribe(self.enable_style, "Enable style")
+        Publisher.subscribe(self.OnDisableStyle, "Disable style")
+        Publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
+        Publisher.subscribe(self.AddActors, "Add actors " + str(const.SURFACE))
+        Publisher.subscribe(self.RemoveActors, "Remove actors " + str(const.SURFACE))
+        Publisher.subscribe(self.OnShowText, "Show text actors on viewers")
+        Publisher.subscribe(self.OnShowRuler, "Show rulers on viewers")
+        Publisher.subscribe(self.OnHideRuler, "Hide rulers on viewers")
+        Publisher.subscribe(self.OnRulerVisibilityStatus, "Receive ruler visibility status")
+        Publisher.subscribe(self.OnShowOrientationCube, "Show orientation cube")
+        Publisher.subscribe(self.OnCloseProject, "Close project data")
+        Publisher.subscribe(self.FocusCamera, "Focus volume camera")
+        Publisher.subscribe(self.RemoveAllActors, "Remove all volume actors")
+        Publisher.subscribe(self.SetStereoMode, "Set stereo mode")
+        Publisher.subscribe(self.Reposition3DPlane, "Reposition 3D Plane")
+        Publisher.subscribe(self.UpdatePointer, "Update volume viewer pointer")
+        Publisher.subscribe(self.RemoveVolume, "Remove Volume")
+        Publisher.subscribe(self._EnableSSAO, "Enable SSAO")
+        Publisher.subscribe(self._DisableSSAO, "Disable SSAO")
+        Publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")
 
     def _update_fps_visibility(self):
         show_fps = (
@@ -129,7 +354,7 @@ class Base3DView(wx.Panel):
             if self.orientation_widget:
                 try:
                     self.orientation_widget.SetEnabled(0)
-                except:
+                except:  # noqa: E722 - preserve existing widget cleanup behavior
                     pass
                 self.orientation_widget = None
 
@@ -474,6 +699,9 @@ class Base3DView(wx.Panel):
         actor = self.points_reference.pop(point)
         self.ren.RemoveActor(actor)
 
+    def IsTargetMode(self):
+        return self.target_mode
+
     def CenterOfMass(self):
         barycenter = [0.0, 0.0, 0.0]
         proj = prj.Project()
@@ -545,6 +773,23 @@ class Base3DView(wx.Panel):
         if not self.nav_status:
             self.UpdateRender()
 
+    def __bind_events_wx(self):
+        # self.Bind(wx.EVT_SIZE, self.OnSize)
+        #  self.canvas.subscribe_event('LeftButtonPressEvent', self.on_insert_point)
+        pass
+
+    def on_insert_point(self, evt):
+        pos = evt.position
+        self.polygon.append_point(pos)
+        self.canvas.Refresh()
+
+        arr = self.canvas.draw_element_to_array(
+            [
+                self.polygon,
+            ]
+        )
+        imsave("/tmp/polygon.png", arr)
+
     def SetInteractorStyle(self, state):
         # Check if we're entering or exiting a measurement state
         measurement_states = {
@@ -614,46 +859,6 @@ class Base3DView(wx.Panel):
     def SendViewerSize(self):
         width, height = self.interactor.GetRenderWindow().GetSize()
         Publisher.sendMessage("Receive volume viewer size", size=(width, height))
-
-    def SetVolumetricCamera(self, enabled):
-        self.use_volumetric_camera = enabled
-        self.camera_show_object = None
-
-    def VolumetricCamera(self, cam_focus):
-        # TODO: exclude dependency on initial focus
-        # cam_focus = np.array(bases.flip_x(position[:3]))
-        # cam_focus = np.array(bases.flip_x(position))
-        cam = self.ren.GetActiveCamera()
-
-        if self.initial_focus is None:
-            self.initial_focus = np.array(cam.GetFocalPoint())
-
-        cam_pos0 = np.array(cam.GetPosition())
-        cam_focus0 = np.array(cam.GetFocalPoint())
-        v0 = cam_pos0 - cam_focus0
-        v0n = np.sqrt(inner1d(v0, v0))
-
-        if self.camera_show_object is None:
-            self.camera_show_object = self.coil_visualizer.show_coil
-
-        if self.camera_show_object:
-            v1 = np.array(
-                [
-                    cam_focus[0] - self.pTarget[0],
-                    cam_focus[1] - self.pTarget[1],
-                    cam_focus[2] - self.pTarget[2],
-                ]
-            )
-        else:
-            v1 = cam_focus - self.initial_focus
-
-        v1n = np.sqrt(inner1d(v1, v1))
-        if not v1n:
-            v1n = 1.0
-        cam_pos = (v1 / v1n) * v0n + cam_focus
-
-        cam.SetFocalPoint(cam_focus)
-        cam.SetPosition(cam_pos)
 
     def OnEnableBrightContrast(self):
         style = self.style
