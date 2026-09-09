@@ -123,12 +123,26 @@ class CanvasRendererCTX:
         self._bind_events()
 
     def _bind_events(self) -> None:
-        iren = self.viewer.interactor
-        iren.Bind(wx.EVT_MOTION, self.OnMouseMove)
-        iren.Bind(wx.EVT_LEFT_DOWN, self.OnLeftButtonPress)
-        iren.Bind(wx.EVT_LEFT_UP, self.OnLeftButtonRelease)
-        iren.Bind(wx.EVT_LEFT_DCLICK, self.OnDoubleClick)
+        self._mouse_events_enabled = False
+        self.set_mouse_events_enabled(True)
         self.canvas_renderer.AddObserver("StartEvent", self.OnPaint)
+
+    def set_mouse_events_enabled(self, enabled: bool) -> None:
+        """Only the active scene handles mouse events on a shared interactor."""
+        if self._mouse_events_enabled == enabled:
+            return
+        iren = self.viewer.interactor
+        for event, handler in (
+            (wx.EVT_MOTION, self.OnMouseMove),
+            (wx.EVT_LEFT_DOWN, self.OnLeftButtonPress),
+            (wx.EVT_LEFT_UP, self.OnLeftButtonRelease),
+            (wx.EVT_LEFT_DCLICK, self.OnDoubleClick),
+        ):
+            if enabled:
+                iren.Bind(event, handler)
+            else:
+                iren.Unbind(event, handler=handler)
+        self._mouse_events_enabled = enabled
 
     def subscribe_event(self, event: str, callback: Callable) -> None:
         ref = WeakMethod(callback)

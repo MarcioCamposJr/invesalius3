@@ -21,18 +21,17 @@ import sys
 
 import wx
 import wx.aui
-import wx.lib.agw.fourwaysplitter as fws
 import wx.lib.colourselect as csel
 import wx.lib.platebtn as pbtn
 
 import invesalius.constants as const
 import invesalius.data.viewer_slice as slice_viewer
-import invesalius.data.viewer_volume as volume_viewer
 import invesalius.gui.widgets.slice_menu as slice_menu_
 import invesalius.project as project
 import invesalius.session as ses
 from invesalius import inv_paths
 from invesalius.constants import ID_TO_BMP
+from invesalius.gui.volume_view_host import VolumeViewHost
 from invesalius.gui.widgets.clut_raycasting import (
     EVT_CLUT_CURVE_SELECT,
     EVT_CLUT_CURVE_WL_CHANGE,
@@ -124,7 +123,11 @@ class Panel(wx.Panel):
             .Name("Volume")
             .Bottom()
             .Centre()
-            .Caption(_("Volume"))
+            .Caption(
+                _("Navigation")
+                if ses.Session().GetConfig("mode") == const.MODE_NAVIGATOR
+                else _("Volume")
+            )
             .MaximizeButton(True)
             .CloseButton(False)
         )
@@ -226,7 +229,8 @@ class VolumeInteraction(wx.Panel):
         self.aui_manager = wx.aui.AuiManager()
         self.aui_manager.SetManagedWindow(self)
 
-        p1 = volume_viewer.Viewer(self)
+        self.view_host = VolumeViewHost(self)
+        p1 = self.view_host
         s1 = (
             wx.aui.AuiPaneInfo().Centre().CloseButton(False).MaximizeButton(False).CaptionVisible(0)
         )

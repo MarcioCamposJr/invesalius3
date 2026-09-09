@@ -16,7 +16,8 @@ from invesalius.pubsub import pub as Publisher
 
 
 class RobotForceVisualizer:
-    def __init__(self, interactor, num_segments=30, radius=0.5, thickness=0.1):
+    def __init__(self, interactor, num_segments=30, radius=0.5, thickness=0.1, *, publisher=None):
+        self._publisher = publisher if publisher is not None else Publisher
         self.ren_force = vtkRenderer()
         self.ren_force.SetLayer(1)
 
@@ -55,10 +56,10 @@ class RobotForceVisualizer:
         self.__bind_events()
 
     def __bind_events(self):
-        Publisher.subscribe(
+        self._publisher.subscribe(
             self.OnUpdateRobotForceData, "Robot to Neuronavigation: Send force sensor data"
         )
-        Publisher.subscribe(self.set_visibility, "Set visibility robot force visualizer")
+        self._publisher.subscribe(self.set_visibility, "Set visibility robot force visualizer")
 
     def _create_segment(self, i):
         theta_start = (2 * math.pi / self.num_segments) * i

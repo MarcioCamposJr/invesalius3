@@ -2,7 +2,6 @@ import vtk
 
 import invesalius.constants as const
 import invesalius.data.coordinates as dco
-import invesalius.data.slice_ as sl
 import invesalius.session as ses
 from invesalius.data.markers.marker import MarkerType
 from invesalius.gui.widgets.canvas_renderer import CanvasHandlerBase
@@ -95,7 +94,10 @@ class MarkerVisualizer:
     # Color for the marker for target when the coil at the target.
     COIL_AT_TARGET_COLOR = vtk.vtkNamedColors().GetColor3d("Green")
 
-    def __init__(self, renderer, interactor, actor_factory, vector_field_visualizer):
+    def __init__(
+        self, renderer, interactor, actor_factory, vector_field_visualizer, *, publisher=None
+    ):
+        self._publisher = publisher if publisher is not None else Publisher
         self.renderer = renderer
         self.interactor = interactor
 
@@ -130,24 +132,24 @@ class MarkerVisualizer:
         self.__bind_events()
 
     def __bind_events(self):
-        Publisher.subscribe(self.AddMarker, "Add marker")
-        Publisher.subscribe(self.UpdateMarker, "Update marker")
-        Publisher.subscribe(self.HideMarkers, "Hide markers")
-        Publisher.subscribe(self.ShowMarkers, "Show markers")
-        Publisher.subscribe(self.DeleteMarkers, "Delete markers")
-        Publisher.subscribe(self.DeleteMarker, "Delete marker")
-        Publisher.subscribe(self.SetCameraToFocusOnMarker, "Set camera to focus on marker")
-        Publisher.subscribe(self.HighlightMarker, "Highlight marker")
-        Publisher.subscribe(self.UnhighlightMarker, "Unhighlight marker")
-        Publisher.subscribe(self.SetNewColor, "Set new color")
-        Publisher.subscribe(self.SetTarget, "Set target")
-        Publisher.subscribe(self.UnsetTarget, "Unset target")
-        Publisher.subscribe(self.SetTargetTransparency, "Set target transparency")
-        Publisher.subscribe(self.SetCoilAtTarget, "Coil at target")
-        Publisher.subscribe(self.UpdateBrainTargets, "Update brain targets")
-        Publisher.subscribe(self.UpdateNavigationStatus, "Navigation status")
-        Publisher.subscribe(self.UpdateTargetMode, "Set target mode")
-        Publisher.subscribe(
+        self._publisher.subscribe(self.AddMarker, "Add marker")
+        self._publisher.subscribe(self.UpdateMarker, "Update marker")
+        self._publisher.subscribe(self.HideMarkers, "Hide markers")
+        self._publisher.subscribe(self.ShowMarkers, "Show markers")
+        self._publisher.subscribe(self.DeleteMarkers, "Delete markers")
+        self._publisher.subscribe(self.DeleteMarker, "Delete marker")
+        self._publisher.subscribe(self.SetCameraToFocusOnMarker, "Set camera to focus on marker")
+        self._publisher.subscribe(self.HighlightMarker, "Highlight marker")
+        self._publisher.subscribe(self.UnhighlightMarker, "Unhighlight marker")
+        self._publisher.subscribe(self.SetNewColor, "Set new color")
+        self._publisher.subscribe(self.SetTarget, "Set target")
+        self._publisher.subscribe(self.UnsetTarget, "Unset target")
+        self._publisher.subscribe(self.SetTargetTransparency, "Set target transparency")
+        self._publisher.subscribe(self.SetCoilAtTarget, "Coil at target")
+        self._publisher.subscribe(self.UpdateBrainTargets, "Update brain targets")
+        self._publisher.subscribe(self.UpdateNavigationStatus, "Navigation status")
+        self._publisher.subscribe(self.UpdateTargetMode, "Set target mode")
+        self._publisher.subscribe(
             self.UpdateVectorFieldAssemblyVisibility, "Set vector field assembly visibility"
         )
 

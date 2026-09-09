@@ -2,11 +2,8 @@ import os
 
 import vtk
 
-import invesalius.constants as const
-import invesalius.data.polydata_utils as pu
 import invesalius.data.vtk_utils as vtku
 import invesalius.session as ses
-from invesalius.navigation.navigation import Navigation
 from invesalius.navigation.tracker import Tracker
 from invesalius.pubsub import pub as Publisher
 
@@ -22,7 +19,8 @@ class CoilVisualizer:
     # Color for the marker for target when the coil at the target.
     COIL_AT_TARGET_COLOR = vtk.vtkNamedColors().GetColor3d("Green")
 
-    def __init__(self, renderer, actor_factory, vector_field_visualizer):
+    def __init__(self, renderer, actor_factory, vector_field_visualizer, *, publisher=None):
+        self._publisher = publisher if publisher is not None else Publisher
         self.renderer = renderer
         self.tracker = Tracker()
 
@@ -60,13 +58,13 @@ class CoilVisualizer:
         self.__bind_events()
 
     def __bind_events(self):
-        Publisher.subscribe(self.SetCoilAtTarget, "Coil at target")
-        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
-        Publisher.subscribe(self.ShowCoil, "Show coil in viewer volume")
-        Publisher.subscribe(self.ResetCoilVisualizer, "Reset coil selection")
-        Publisher.subscribe(self.SelectCoil, "Select coil")
-        Publisher.subscribe(self.UpdateCoilPoses, "Update coil poses")
-        Publisher.subscribe(self.UpdateVectorField, "Update vector field")
+        self._publisher.subscribe(self.SetCoilAtTarget, "Coil at target")
+        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        self._publisher.subscribe(self.ShowCoil, "Show coil in viewer volume")
+        self._publisher.subscribe(self.ResetCoilVisualizer, "Reset coil selection")
+        self._publisher.subscribe(self.SelectCoil, "Select coil")
+        self._publisher.subscribe(self.UpdateCoilPoses, "Update coil poses")
+        self._publisher.subscribe(self.UpdateVectorField, "Update vector field")
 
     def LoadConfig(self):
         session = ses.Session()
