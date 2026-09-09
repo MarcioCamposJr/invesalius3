@@ -12,8 +12,7 @@ class ProbeVisualizer:
     A class for visualizing probe in the volume viewer.
     """
 
-    def __init__(self, renderer, *, publisher=None):
-        self._publisher = publisher if publisher is not None else Publisher
+    def __init__(self, renderer):
         self.renderer = renderer
 
         self.probe_actor = None
@@ -25,9 +24,9 @@ class ProbeVisualizer:
         self.__bind_events()
 
     def __bind_events(self):
-        self._publisher.subscribe(self.ShowProbe, "Show probe in viewer volume")
-        self._publisher.subscribe(self.UpdateProbePose, "Update probe pose")
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.ShowProbe, "Show probe in viewer volume")
+        Publisher.subscribe(self.UpdateProbePose, "Update probe pose")
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
 
     def OnNavigationStatus(self, nav_status, vis_status):
         self.is_navigating = nav_status

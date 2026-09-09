@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
 class Base3DInteractorStyle(vtkInteractorStyleTrackballCamera):
     def __init__(self, viewer: "Viewer"):
-        self._publisher = getattr(viewer, "_publisher", Publisher)
         self.right_pressed = False
         self.left_pressed = False
         self.middle_pressed = False
@@ -71,7 +70,7 @@ class Base3DInteractorStyle(vtkInteractorStyleTrackballCamera):
         self.__bind_events()
 
     def __bind_events(self):
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
 
     def OnNavigationStatus(self, nav_status, vis_status):
         self.nav_status = nav_status
@@ -161,7 +160,7 @@ class DefaultInteractorStyle(Base3DInteractorStyle):
         self.__bind_events()
 
     def __bind_events(self):
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
 
     def OnNavigationStatus(self, nav_status, vis_status):
         self.nav_status = nav_status
@@ -969,7 +968,7 @@ class CrossInteractorStyle(DefaultInteractorStyle):
         self.__bind_events()
 
     def __bind_events(self):
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
 
     def OnNavigationStatus(self, nav_status, vis_status):
         self.nav_status = nav_status

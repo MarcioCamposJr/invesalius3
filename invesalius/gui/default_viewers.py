@@ -175,6 +175,7 @@ class Panel(wx.Panel):
             caption (str): The new caption to set for the viewer pane.
         """
         self.aui_manager.GetPane(viewer_name).Caption(caption)
+        self.aui_manager.Update()
         self.Refresh()
 
     def OnSetTargetMode(self, enabled=True):

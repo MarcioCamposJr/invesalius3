@@ -60,12 +60,12 @@ class VolumeView(Base3DView):
 
     def _bind_events(self):
         super()._bind_events()
-        self._publisher.subscribe(self.OnExportSurface, "Export surface to file")
-        self._publisher.subscribe(self.OnExportPicture, "Export picture to file")
-        self._publisher.subscribe(self.OnStartSeed, "Create surface by seeding - start")
-        self._publisher.subscribe(self.OnEndSeed, "Create surface by seeding - end")
-        self._publisher.subscribe(self.load_mask_preview, "Load mask preview")
-        self._publisher.subscribe(self.remove_mask_preview, "Remove mask preview")
+        Publisher.subscribe(self.OnExportSurface, "Export surface to file")
+        Publisher.subscribe(self.OnExportPicture, "Export picture to file")
+        Publisher.subscribe(self.OnStartSeed, "Create surface by seeding - start")
+        Publisher.subscribe(self.OnEndSeed, "Create surface by seeding - end")
+        Publisher.subscribe(self.load_mask_preview, "Load mask preview")
+        Publisher.subscribe(self.remove_mask_preview, "Remove mask preview")
 
     def OnStartSeed(self):
         self.seed_points = []
@@ -296,157 +296,149 @@ class Viewer(NavigationView, VolumeView):
     """
 
     def _bind_events(self):
-        self._publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
-        self._publisher.subscribe(self.RemoveSurface, "Remove surface actor from viewer")
-        # self._publisher.subscribe(self.OnShowSurface, 'Show surface')
-        self._publisher.subscribe(self.UpdateRender, "Render volume viewer")
-        self._publisher.subscribe(
-            self.ChangeBackgroundColour, "Change volume viewer background colour"
-        )
+        Publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
+        Publisher.subscribe(self.RemoveSurface, "Remove surface actor from viewer")
+        # Publisher.subscribe(self.OnShowSurface, 'Show surface')
+        Publisher.subscribe(self.UpdateRender, "Render volume viewer")
+        Publisher.subscribe(self.ChangeBackgroundColour, "Change volume viewer background colour")
 
         # Related to raycasting
-        self._publisher.subscribe(self.LoadVolume, "Load volume into viewer")
-        self._publisher.subscribe(self.UnloadVolume, "Unload volume")
-        self._publisher.subscribe(self.OnSetWindowLevelText, "Set volume window and level text")
-        self._publisher.subscribe(self.OnHideRaycasting, "Hide raycasting volume")
-        self._publisher.subscribe(self.OnShowRaycasting, "Update raycasting preset")
+        Publisher.subscribe(self.LoadVolume, "Load volume into viewer")
+        Publisher.subscribe(self.UnloadVolume, "Unload volume")
+        Publisher.subscribe(self.OnSetWindowLevelText, "Set volume window and level text")
+        Publisher.subscribe(self.OnHideRaycasting, "Hide raycasting volume")
+        Publisher.subscribe(self.OnShowRaycasting, "Update raycasting preset")
         ###
-        self._publisher.subscribe(self.AppendActor, "AppendActor")
-        self._publisher.subscribe(self.SetWidgetInteractor, "Set Widget Interactor")
-        self._publisher.subscribe(self.OnSetViewAngle, "Set volume view angle")
+        Publisher.subscribe(self.AppendActor, "AppendActor")
+        Publisher.subscribe(self.SetWidgetInteractor, "Set Widget Interactor")
+        Publisher.subscribe(self.OnSetViewAngle, "Set volume view angle")
 
-        self._publisher.subscribe(
+        Publisher.subscribe(
             self.OnDisableBrightContrast, "Set interaction mode " + str(const.MODE_SLICE_EDITOR)
         )
 
-        self._publisher.subscribe(self.OnExportSurface, "Export surface to file")
+        Publisher.subscribe(self.OnExportSurface, "Export surface to file")
 
-        self._publisher.subscribe(self.LoadSlicePlane, "Load slice plane")
+        Publisher.subscribe(self.LoadSlicePlane, "Load slice plane")
 
-        self._publisher.subscribe(self.ResetCamClippingRange, "Reset cam clipping range")
-        self._publisher.subscribe(self.SendActiveCamera, "Send volume viewer active camera")
-        self._publisher.subscribe(self.SendViewerSize, "Send volume viewer size")
+        Publisher.subscribe(self.ResetCamClippingRange, "Reset cam clipping range")
+        Publisher.subscribe(self.SendActiveCamera, "Send volume viewer active camera")
+        Publisher.subscribe(self.SendViewerSize, "Send volume viewer size")
 
-        self._publisher.subscribe(self.enable_style, "Enable style")
-        self._publisher.subscribe(self.OnDisableStyle, "Disable style")
+        Publisher.subscribe(self.enable_style, "Enable style")
+        Publisher.subscribe(self.OnDisableStyle, "Disable style")
 
-        self._publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
+        Publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
 
-        self._publisher.subscribe(self.AddActors, "Add actors " + str(const.SURFACE))
-        self._publisher.subscribe(self.RemoveActors, "Remove actors " + str(const.SURFACE))
+        Publisher.subscribe(self.AddActors, "Add actors " + str(const.SURFACE))
+        Publisher.subscribe(self.RemoveActors, "Remove actors " + str(const.SURFACE))
 
-        self._publisher.subscribe(self.OnShowText, "Show text actors on viewers")
-        self._publisher.subscribe(self.OnShowRuler, "Show rulers on viewers")
-        self._publisher.subscribe(self.OnHideRuler, "Hide rulers on viewers")
-        self._publisher.subscribe(self.OnRulerVisibilityStatus, "Receive ruler visibility status")
-        self._publisher.subscribe(self.OnShowOrientationCube, "Show orientation cube")
-        self._publisher.subscribe(self.OnCloseProject, "Close project data")
-        self._publisher.subscribe(self.FocusCamera, "Focus volume camera")
+        Publisher.subscribe(self.OnShowText, "Show text actors on viewers")
+        Publisher.subscribe(self.OnShowRuler, "Show rulers on viewers")
+        Publisher.subscribe(self.OnHideRuler, "Hide rulers on viewers")
+        Publisher.subscribe(self.OnRulerVisibilityStatus, "Receive ruler visibility status")
+        Publisher.subscribe(self.OnShowOrientationCube, "Show orientation cube")
+        Publisher.subscribe(self.OnCloseProject, "Close project data")
+        Publisher.subscribe(self.FocusCamera, "Focus volume camera")
 
-        self._publisher.subscribe(self.RemoveAllActors, "Remove all volume actors")
+        Publisher.subscribe(self.RemoveAllActors, "Remove all volume actors")
 
-        self._publisher.subscribe(self.OnExportPicture, "Export picture to file")
+        Publisher.subscribe(self.OnExportPicture, "Export picture to file")
 
-        self._publisher.subscribe(self.OnStartSeed, "Create surface by seeding - start")
-        self._publisher.subscribe(self.OnEndSeed, "Create surface by seeding - end")
+        Publisher.subscribe(self.OnStartSeed, "Create surface by seeding - start")
+        Publisher.subscribe(self.OnEndSeed, "Create surface by seeding - end")
 
-        self._publisher.subscribe(self.SetStereoMode, "Set stereo mode")
+        Publisher.subscribe(self.SetStereoMode, "Set stereo mode")
 
-        self._publisher.subscribe(self.Reposition3DPlane, "Reposition 3D Plane")
+        Publisher.subscribe(self.Reposition3DPlane, "Reposition 3D Plane")
 
-        self._publisher.subscribe(self.UpdatePointer, "Update volume viewer pointer")
+        Publisher.subscribe(self.UpdatePointer, "Update volume viewer pointer")
 
-        self._publisher.subscribe(self.RemoveVolume, "Remove Volume")
+        Publisher.subscribe(self.RemoveVolume, "Remove Volume")
 
-        self._publisher.subscribe(self.OnSensors, "Sensors ID")
-        self._publisher.subscribe(self.OnRemoveSensorsID, "Remove sensors ID")
+        Publisher.subscribe(self.OnSensors, "Sensors ID")
+        Publisher.subscribe(self.OnRemoveSensorsID, "Remove sensors ID")
 
         # TODO: This shouldn't be here, rather in marker_visualizer.py. The problem is that
         #   e-field-related markers are stored in this class, even though all other marker
         #   types have been moved to MarkerViewer.
-        self._publisher.subscribe(self.DeleteEFieldMarkers, "Delete markers")
+        Publisher.subscribe(self.DeleteEFieldMarkers, "Delete markers")
 
         # Related to object tracking during neuronavigation
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
-        self._publisher.subscribe(self.UpdateArrowPose, "Update object arrow matrix")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.UpdateArrowPose, "Update object arrow matrix")
+        Publisher.subscribe(
             self.UpdateEfieldPointLocation, "Update point location for e-field calculation"
         )
-        self._publisher.subscribe(self.GetEnorm, "Get enorm")
-        self._publisher.subscribe(self.TrackObject, "Track object")
-        self._publisher.subscribe(self.SetTargetMode, "Set target mode")
-        self._publisher.subscribe(self.OnUpdateCoilPose, "Update coil pose")
-        self._publisher.subscribe(self.OnSetTarget, "Set target")
-        self._publisher.subscribe(self.OnUnsetTarget, "Unset target")
-        self._publisher.subscribe(self.OnUpdateAngleThreshold, "Update angle threshold")
-        self._publisher.subscribe(self.OnUpdateDistanceThreshold, "Update distance threshold")
-        self._publisher.subscribe(self.OnUpdateTracts, "Update tracts")
-        self._publisher.subscribe(self.OnUpdateEfieldvis, "Update efield vis")
-        self._publisher.subscribe(self.InitializeColorArray, "Initialize color array")
-        self._publisher.subscribe(self.OnRemoveTracts, "Remove tracts")
-        self._publisher.subscribe(self.UpdateSeedOffset, "Update seed offset")
-        self._publisher.subscribe(self.UpdateMarkerOffsetState, "Update marker offset state")
-        self._publisher.subscribe(self.AddPeeledSurface, "Update peel")
-        self._publisher.subscribe(self.InitEfield, "Initialize E-field brain")
-        self._publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
-        self._publisher.subscribe(self.InitLocatorViewer, "Get init locator")
-        self._publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
-        self._publisher.subscribe(self.InitLocatorViewer, "Get init locator")
-        self._publisher.subscribe(self.load_mask_preview, "Load mask preview")
-        self._publisher.subscribe(self.remove_mask_preview, "Remove mask preview")
-        self._publisher.subscribe(self.GetEfieldActor, "Send Actor")
-        self._publisher.subscribe(self.ReturnToDefaultColorActor, "Recolor again")
-        self._publisher.subscribe(self.SaveEfieldData, "Save Efield data")
-        self._publisher.subscribe(self.SavedAllEfieldData, "Save all Efield data")
-        self._publisher.subscribe(self.SaveEfieldTargetData, "Save target data")
-        self._publisher.subscribe(self.ClearSaveEfieldData, "Clear saved efield data")
-        self._publisher.subscribe(self.GetTargetSavedEfieldData, "Get target index efield")
-        self._publisher.subscribe(self.CheckStatusSavedEfieldData, "Check efield data")
-        self._publisher.subscribe(self.GetNeuronavigationApi, "Get Neuronavigation Api")
-        self._publisher.subscribe(
-            self.UpdateEfieldPointLocationOffline, "Update interseccion offline"
-        )
-        self._publisher.subscribe(self.MaxEfieldActor, "Show max Efield actor")
-        self._publisher.subscribe(self.CoGEfieldActor, "Show CoG Efield actor")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.GetEnorm, "Get enorm")
+        Publisher.subscribe(self.TrackObject, "Track object")
+        Publisher.subscribe(self.SetTargetMode, "Set target mode")
+        Publisher.subscribe(self.OnUpdateCoilPose, "Update coil pose")
+        Publisher.subscribe(self.OnSetTarget, "Set target")
+        Publisher.subscribe(self.OnUnsetTarget, "Unset target")
+        Publisher.subscribe(self.OnUpdateAngleThreshold, "Update angle threshold")
+        Publisher.subscribe(self.OnUpdateDistanceThreshold, "Update distance threshold")
+        Publisher.subscribe(self.OnUpdateTracts, "Update tracts")
+        Publisher.subscribe(self.OnUpdateEfieldvis, "Update efield vis")
+        Publisher.subscribe(self.InitializeColorArray, "Initialize color array")
+        Publisher.subscribe(self.OnRemoveTracts, "Remove tracts")
+        Publisher.subscribe(self.UpdateSeedOffset, "Update seed offset")
+        Publisher.subscribe(self.UpdateMarkerOffsetState, "Update marker offset state")
+        Publisher.subscribe(self.AddPeeledSurface, "Update peel")
+        Publisher.subscribe(self.InitEfield, "Initialize E-field brain")
+        Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
+        Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
+        Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
+        Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
+        Publisher.subscribe(self.load_mask_preview, "Load mask preview")
+        Publisher.subscribe(self.remove_mask_preview, "Remove mask preview")
+        Publisher.subscribe(self.GetEfieldActor, "Send Actor")
+        Publisher.subscribe(self.ReturnToDefaultColorActor, "Recolor again")
+        Publisher.subscribe(self.SaveEfieldData, "Save Efield data")
+        Publisher.subscribe(self.SavedAllEfieldData, "Save all Efield data")
+        Publisher.subscribe(self.SaveEfieldTargetData, "Save target data")
+        Publisher.subscribe(self.ClearSaveEfieldData, "Clear saved efield data")
+        Publisher.subscribe(self.GetTargetSavedEfieldData, "Get target index efield")
+        Publisher.subscribe(self.CheckStatusSavedEfieldData, "Check efield data")
+        Publisher.subscribe(self.GetNeuronavigationApi, "Get Neuronavigation Api")
+        Publisher.subscribe(self.UpdateEfieldPointLocationOffline, "Update interseccion offline")
+        Publisher.subscribe(self.MaxEfieldActor, "Show max Efield actor")
+        Publisher.subscribe(self.CoGEfieldActor, "Show CoG Efield actor")
+        Publisher.subscribe(
             self.CalculateDistanceMaxEfieldCoGE, "Show distance between Max and CoG Efield"
         )
-        self._publisher.subscribe(self.EfieldVectors, "Show Efield vectors")
-        self._publisher.subscribe(self.RecolorEfieldActor, "Recolor efield actor")
-        self._publisher.subscribe(self.GetScalpEfield, "Send scalp index")
+        Publisher.subscribe(self.EfieldVectors, "Show Efield vectors")
+        Publisher.subscribe(self.RecolorEfieldActor, "Recolor efield actor")
+        Publisher.subscribe(self.GetScalpEfield, "Send scalp index")
         # Related to robot tracking during neuronavigation
-        self._publisher.subscribe(
+        Publisher.subscribe(
             self.OnUpdateRobotWarning, "Robot to Neuronavigation: Update robot warning"
         )
-        self._publisher.subscribe(self.GetCoilPosition, "Calculate position and rotation")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.GetCoilPosition, "Calculate position and rotation")
+        Publisher.subscribe(
             self.CreateCortexProjectionOnScalp, "Send efield target position on brain"
         )
-        self._publisher.subscribe(self.UpdateEfieldThreshold, "Update Efield Threshold")
-        self._publisher.subscribe(self.UpdateEfieldROISize, "Update Efield ROI size")
-        self._publisher.subscribe(self.SetEfieldTargetAtCortex, "Set as Efield target at cortex")
-        self._publisher.subscribe(self.EnableShowEfieldAboveThreshold, "Show area above threshold")
-        self._publisher.subscribe(self.ShowEfieldContours, "Show Efield contours")
-        self._publisher.subscribe(self.EnableEfieldTools, "Enable Efield tools")
-        self._publisher.subscribe(self.ClearTargetAtCortex, "Clear efield target at cortex")
-        self._publisher.subscribe(self.CoGEforCortexMarker, "Get Cortex position")
-        self._publisher.subscribe(self.AddCortexMarkerActor, "Add cortex marker actor")
-        self._publisher.subscribe(
-            self.CortexMarkersVisualization, "Display efield markers at cortex"
-        )
-        self._publisher.subscribe(self.GetTargetPositions, "Get targets Ids for mtms")
-        self._publisher.subscribe(self.GetTargetPathmTMS, "Send targeting file path")
-        self._publisher.subscribe(self.GetdIsfromCoord, "Send mtms coords")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.UpdateEfieldThreshold, "Update Efield Threshold")
+        Publisher.subscribe(self.UpdateEfieldROISize, "Update Efield ROI size")
+        Publisher.subscribe(self.SetEfieldTargetAtCortex, "Set as Efield target at cortex")
+        Publisher.subscribe(self.EnableShowEfieldAboveThreshold, "Show area above threshold")
+        Publisher.subscribe(self.ShowEfieldContours, "Show Efield contours")
+        Publisher.subscribe(self.EnableEfieldTools, "Enable Efield tools")
+        Publisher.subscribe(self.ClearTargetAtCortex, "Clear efield target at cortex")
+        Publisher.subscribe(self.CoGEforCortexMarker, "Get Cortex position")
+        Publisher.subscribe(self.AddCortexMarkerActor, "Add cortex marker actor")
+        Publisher.subscribe(self.CortexMarkersVisualization, "Display efield markers at cortex")
+        Publisher.subscribe(self.GetTargetPositions, "Get targets Ids for mtms")
+        Publisher.subscribe(self.GetTargetPathmTMS, "Send targeting file path")
+        Publisher.subscribe(self.GetdIsfromCoord, "Send mtms coords")
+        Publisher.subscribe(
             self.EnableSaveAutomaticallyEfieldData, "Save automatically efield data"
         )
-        self._publisher.subscribe(
-            self.Getdiperdtforreport, "Get diperdt used in efield calculation"
-        )
-        self._publisher.subscribe(self.UpdateTractSeedBasedEfield, "Update tract seed based efield")
-        self._publisher.subscribe(self.Get_meshes_paths_to_report, "Get path meshes")
+        Publisher.subscribe(self.Getdiperdtforreport, "Get diperdt used in efield calculation")
+        Publisher.subscribe(self.UpdateTractSeedBasedEfield, "Update tract seed based efield")
+        Publisher.subscribe(self.Get_meshes_paths_to_report, "Get path meshes")
 
         # SSAO related
-        self._publisher.subscribe(self._EnableSSAO, "Enable SSAO")
-        self._publisher.subscribe(self._DisableSSAO, "Disable SSAO")
-        self._publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")
+        Publisher.subscribe(self._EnableSSAO, "Enable SSAO")
+        Publisher.subscribe(self._DisableSSAO, "Disable SSAO")
+        Publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")

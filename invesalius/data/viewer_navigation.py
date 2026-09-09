@@ -153,7 +153,6 @@ class NavigationView(Base3DView):
         # An object that can be used to create vector fields in the 3D viewer.
         self.vector_field_visualizer = VectorFieldVisualizer(
             actor_factory=self.actor_factory,
-            publisher=self._publisher,
         )
 
         # An object to manage visualizing markers in the 3D viewer.
@@ -162,7 +161,6 @@ class NavigationView(Base3DView):
             interactor=self.interactor,
             actor_factory=self.actor_factory,
             vector_field_visualizer=self.vector_field_visualizer,
-            publisher=self._publisher,
         )
 
         # An object to manage visualizing coils in the 3D viewer.
@@ -170,13 +168,10 @@ class NavigationView(Base3DView):
             renderer=self.ren,
             actor_factory=self.actor_factory,
             vector_field_visualizer=self.vector_field_visualizer,
-            publisher=self._publisher,
         )
 
-        self.probe_visualizer = ProbeVisualizer(self.ren, publisher=self._publisher)
-        self.robot_force_visualizer = RobotForceVisualizer(
-            self.interactor, publisher=self._publisher
-        )
+        self.probe_visualizer = ProbeVisualizer(self.ren)
+        self.robot_force_visualizer = RobotForceVisualizer(self.interactor)
         self.robots = Robots()
 
         self.seed_offset = const.SEED_OFFSET
@@ -215,84 +210,78 @@ class NavigationView(Base3DView):
 
     def _bind_events(self):
         super()._bind_events()
-        self._publisher.subscribe(self.OnSensors, "Sensors ID")
-        self._publisher.subscribe(self.OnRemoveSensorsID, "Remove sensors ID")
-        self._publisher.subscribe(self.DeleteEFieldMarkers, "Delete markers")
-        self._publisher.subscribe(self.OnNavigationStatus, "Navigation status")
-        self._publisher.subscribe(self.UpdateArrowPose, "Update object arrow matrix")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.OnSensors, "Sensors ID")
+        Publisher.subscribe(self.OnRemoveSensorsID, "Remove sensors ID")
+        Publisher.subscribe(self.DeleteEFieldMarkers, "Delete markers")
+        Publisher.subscribe(self.OnNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.UpdateArrowPose, "Update object arrow matrix")
+        Publisher.subscribe(
             self.UpdateEfieldPointLocation, "Update point location for e-field calculation"
         )
-        self._publisher.subscribe(self.GetEnorm, "Get enorm")
-        self._publisher.subscribe(self.TrackObject, "Track object")
-        self._publisher.subscribe(self.SetTargetMode, "Set target mode")
-        self._publisher.subscribe(self.OnUpdateCoilPose, "Update coil pose")
-        self._publisher.subscribe(self.OnSetTarget, "Set target")
-        self._publisher.subscribe(self.OnUnsetTarget, "Unset target")
-        self._publisher.subscribe(self.OnUpdateAngleThreshold, "Update angle threshold")
-        self._publisher.subscribe(self.OnUpdateDistanceThreshold, "Update distance threshold")
-        self._publisher.subscribe(self.OnUpdateTracts, "Update tracts")
-        self._publisher.subscribe(self.OnUpdateEfieldvis, "Update efield vis")
-        self._publisher.subscribe(self.InitializeColorArray, "Initialize color array")
-        self._publisher.subscribe(self.OnRemoveTracts, "Remove tracts")
-        self._publisher.subscribe(self.UpdateSeedOffset, "Update seed offset")
-        self._publisher.subscribe(self.UpdateMarkerOffsetState, "Update marker offset state")
-        self._publisher.subscribe(self.AddPeeledSurface, "Update peel")
-        self._publisher.subscribe(self.InitEfield, "Initialize E-field brain")
-        self._publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
-        self._publisher.subscribe(self.InitLocatorViewer, "Get init locator")
-        self._publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
-        self._publisher.subscribe(self.InitLocatorViewer, "Get init locator")
-        self._publisher.subscribe(self.GetEfieldActor, "Send Actor")
-        self._publisher.subscribe(self.ReturnToDefaultColorActor, "Recolor again")
-        self._publisher.subscribe(self.SaveEfieldData, "Save Efield data")
-        self._publisher.subscribe(self.SavedAllEfieldData, "Save all Efield data")
-        self._publisher.subscribe(self.SaveEfieldTargetData, "Save target data")
-        self._publisher.subscribe(self.ClearSaveEfieldData, "Clear saved efield data")
-        self._publisher.subscribe(self.GetTargetSavedEfieldData, "Get target index efield")
-        self._publisher.subscribe(self.CheckStatusSavedEfieldData, "Check efield data")
-        self._publisher.subscribe(self.GetNeuronavigationApi, "Get Neuronavigation Api")
-        self._publisher.subscribe(
-            self.UpdateEfieldPointLocationOffline, "Update interseccion offline"
-        )
-        self._publisher.subscribe(self.MaxEfieldActor, "Show max Efield actor")
-        self._publisher.subscribe(self.CoGEfieldActor, "Show CoG Efield actor")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.GetEnorm, "Get enorm")
+        Publisher.subscribe(self.TrackObject, "Track object")
+        Publisher.subscribe(self.SetTargetMode, "Set target mode")
+        Publisher.subscribe(self.OnUpdateCoilPose, "Update coil pose")
+        Publisher.subscribe(self.OnSetTarget, "Set target")
+        Publisher.subscribe(self.OnUnsetTarget, "Unset target")
+        Publisher.subscribe(self.OnUpdateAngleThreshold, "Update angle threshold")
+        Publisher.subscribe(self.OnUpdateDistanceThreshold, "Update distance threshold")
+        Publisher.subscribe(self.OnUpdateTracts, "Update tracts")
+        Publisher.subscribe(self.OnUpdateEfieldvis, "Update efield vis")
+        Publisher.subscribe(self.InitializeColorArray, "Initialize color array")
+        Publisher.subscribe(self.OnRemoveTracts, "Remove tracts")
+        Publisher.subscribe(self.UpdateSeedOffset, "Update seed offset")
+        Publisher.subscribe(self.UpdateMarkerOffsetState, "Update marker offset state")
+        Publisher.subscribe(self.AddPeeledSurface, "Update peel")
+        Publisher.subscribe(self.InitEfield, "Initialize E-field brain")
+        Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
+        Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
+        Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
+        Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
+        Publisher.subscribe(self.GetEfieldActor, "Send Actor")
+        Publisher.subscribe(self.ReturnToDefaultColorActor, "Recolor again")
+        Publisher.subscribe(self.SaveEfieldData, "Save Efield data")
+        Publisher.subscribe(self.SavedAllEfieldData, "Save all Efield data")
+        Publisher.subscribe(self.SaveEfieldTargetData, "Save target data")
+        Publisher.subscribe(self.ClearSaveEfieldData, "Clear saved efield data")
+        Publisher.subscribe(self.GetTargetSavedEfieldData, "Get target index efield")
+        Publisher.subscribe(self.CheckStatusSavedEfieldData, "Check efield data")
+        Publisher.subscribe(self.GetNeuronavigationApi, "Get Neuronavigation Api")
+        Publisher.subscribe(self.UpdateEfieldPointLocationOffline, "Update interseccion offline")
+        Publisher.subscribe(self.MaxEfieldActor, "Show max Efield actor")
+        Publisher.subscribe(self.CoGEfieldActor, "Show CoG Efield actor")
+        Publisher.subscribe(
             self.CalculateDistanceMaxEfieldCoGE, "Show distance between Max and CoG Efield"
         )
-        self._publisher.subscribe(self.EfieldVectors, "Show Efield vectors")
-        self._publisher.subscribe(self.RecolorEfieldActor, "Recolor efield actor")
-        self._publisher.subscribe(self.GetScalpEfield, "Send scalp index")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.EfieldVectors, "Show Efield vectors")
+        Publisher.subscribe(self.RecolorEfieldActor, "Recolor efield actor")
+        Publisher.subscribe(self.GetScalpEfield, "Send scalp index")
+        Publisher.subscribe(
             self.OnUpdateRobotWarning, "Robot to Neuronavigation: Update robot warning"
         )
-        self._publisher.subscribe(self.GetCoilPosition, "Calculate position and rotation")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.GetCoilPosition, "Calculate position and rotation")
+        Publisher.subscribe(
             self.CreateCortexProjectionOnScalp, "Send efield target position on brain"
         )
-        self._publisher.subscribe(self.UpdateEfieldThreshold, "Update Efield Threshold")
-        self._publisher.subscribe(self.UpdateEfieldROISize, "Update Efield ROI size")
-        self._publisher.subscribe(self.SetEfieldTargetAtCortex, "Set as Efield target at cortex")
-        self._publisher.subscribe(self.EnableShowEfieldAboveThreshold, "Show area above threshold")
-        self._publisher.subscribe(self.ShowEfieldContours, "Show Efield contours")
-        self._publisher.subscribe(self.EnableEfieldTools, "Enable Efield tools")
-        self._publisher.subscribe(self.ClearTargetAtCortex, "Clear efield target at cortex")
-        self._publisher.subscribe(self.CoGEforCortexMarker, "Get Cortex position")
-        self._publisher.subscribe(self.AddCortexMarkerActor, "Add cortex marker actor")
-        self._publisher.subscribe(
-            self.CortexMarkersVisualization, "Display efield markers at cortex"
-        )
-        self._publisher.subscribe(self.GetTargetPositions, "Get targets Ids for mtms")
-        self._publisher.subscribe(self.GetTargetPathmTMS, "Send targeting file path")
-        self._publisher.subscribe(self.GetdIsfromCoord, "Send mtms coords")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.UpdateEfieldThreshold, "Update Efield Threshold")
+        Publisher.subscribe(self.UpdateEfieldROISize, "Update Efield ROI size")
+        Publisher.subscribe(self.SetEfieldTargetAtCortex, "Set as Efield target at cortex")
+        Publisher.subscribe(self.EnableShowEfieldAboveThreshold, "Show area above threshold")
+        Publisher.subscribe(self.ShowEfieldContours, "Show Efield contours")
+        Publisher.subscribe(self.EnableEfieldTools, "Enable Efield tools")
+        Publisher.subscribe(self.ClearTargetAtCortex, "Clear efield target at cortex")
+        Publisher.subscribe(self.CoGEforCortexMarker, "Get Cortex position")
+        Publisher.subscribe(self.AddCortexMarkerActor, "Add cortex marker actor")
+        Publisher.subscribe(self.CortexMarkersVisualization, "Display efield markers at cortex")
+        Publisher.subscribe(self.GetTargetPositions, "Get targets Ids for mtms")
+        Publisher.subscribe(self.GetTargetPathmTMS, "Send targeting file path")
+        Publisher.subscribe(self.GetdIsfromCoord, "Send mtms coords")
+        Publisher.subscribe(
             self.EnableSaveAutomaticallyEfieldData, "Save automatically efield data"
         )
-        self._publisher.subscribe(
-            self.Getdiperdtforreport, "Get diperdt used in efield calculation"
-        )
-        self._publisher.subscribe(self.UpdateTractSeedBasedEfield, "Update tract seed based efield")
-        self._publisher.subscribe(self.Get_meshes_paths_to_report, "Get path meshes")
+        Publisher.subscribe(self.Getdiperdtforreport, "Get diperdt used in efield calculation")
+        Publisher.subscribe(self.UpdateTractSeedBasedEfield, "Update tract seed based efield")
+        Publisher.subscribe(self.Get_meshes_paths_to_report, "Get path meshes")
 
     def DeleteEFieldMarkers(self, markers):
         if len(self.static_markers_efield) > 0:

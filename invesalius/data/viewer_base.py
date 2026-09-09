@@ -80,11 +80,11 @@ class Base3DView(wx.Panel):
     """Common anatomy, rendering and interaction infrastructure for 3D views.
 
     Specialized initialization hooks keep the legacy construction order.
-    The application still creates a single compatibility viewer.
+    Hosted scenes borrow an interactor; standalone views create their own.
     """
 
-    def __init__(self, parent, *, interactor=None, publisher=None):
-        self._publisher = publisher if publisher is not None else Publisher
+    def __init__(self, parent, *, interactor=None):
+        self._event_router = None
         self._view_active = interactor is None
         self._disposed = False
         self._timers = []
@@ -278,8 +278,8 @@ class Base3DView(wx.Panel):
                 cleanup = getattr(self.style, "CleanUp", None)
                 if cleanup:
                     cleanup()
-                if hasattr(self._publisher, "unsubscribe_owner"):
-                    self._publisher.unsubscribe_owner(self.style)
+                if self._event_router is not None:
+                    self._event_router.unsubscribe_owner(self.style)
                 self.style = None
             self.interactor.SetInteractorStyle(None)
             self.canvas.set_mouse_events_enabled(False)
@@ -329,8 +329,8 @@ class Base3DView(wx.Panel):
             for plane in self._slice_widgets():
                 plane.SetEnabled(0)
                 plane.SetInteractor(None)
-        if hasattr(self._publisher, "dispose"):
-            self._publisher.dispose()
+        if self._event_router is not None:
+            self._event_router.dispose()
 
     def _initialize_navigation_data(self):
         pass
@@ -351,47 +351,45 @@ class Base3DView(wx.Panel):
         pass
 
     def _bind_events(self):
-        self._publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
-        self._publisher.subscribe(self.RemoveSurface, "Remove surface actor from viewer")
-        self._publisher.subscribe(self.UpdateRender, "Render volume viewer")
-        self._publisher.subscribe(
-            self.ChangeBackgroundColour, "Change volume viewer background colour"
-        )
-        self._publisher.subscribe(self.LoadVolume, "Load volume into viewer")
-        self._publisher.subscribe(self.UnloadVolume, "Unload volume")
-        self._publisher.subscribe(self.OnSetWindowLevelText, "Set volume window and level text")
-        self._publisher.subscribe(self.OnHideRaycasting, "Hide raycasting volume")
-        self._publisher.subscribe(self.OnShowRaycasting, "Update raycasting preset")
-        self._publisher.subscribe(self.AppendActor, "AppendActor")
-        self._publisher.subscribe(self.SetWidgetInteractor, "Set Widget Interactor")
-        self._publisher.subscribe(self.OnSetViewAngle, "Set volume view angle")
-        self._publisher.subscribe(
+        Publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
+        Publisher.subscribe(self.RemoveSurface, "Remove surface actor from viewer")
+        Publisher.subscribe(self.UpdateRender, "Render volume viewer")
+        Publisher.subscribe(self.ChangeBackgroundColour, "Change volume viewer background colour")
+        Publisher.subscribe(self.LoadVolume, "Load volume into viewer")
+        Publisher.subscribe(self.UnloadVolume, "Unload volume")
+        Publisher.subscribe(self.OnSetWindowLevelText, "Set volume window and level text")
+        Publisher.subscribe(self.OnHideRaycasting, "Hide raycasting volume")
+        Publisher.subscribe(self.OnShowRaycasting, "Update raycasting preset")
+        Publisher.subscribe(self.AppendActor, "AppendActor")
+        Publisher.subscribe(self.SetWidgetInteractor, "Set Widget Interactor")
+        Publisher.subscribe(self.OnSetViewAngle, "Set volume view angle")
+        Publisher.subscribe(
             self.OnDisableBrightContrast, "Set interaction mode " + str(const.MODE_SLICE_EDITOR)
         )
-        self._publisher.subscribe(self.LoadSlicePlane, "Load slice plane")
-        self._publisher.subscribe(self.ResetCamClippingRange, "Reset cam clipping range")
-        self._publisher.subscribe(self.SendActiveCamera, "Send volume viewer active camera")
-        self._publisher.subscribe(self.SendViewerSize, "Send volume viewer size")
-        self._publisher.subscribe(self.enable_style, "Enable style")
-        self._publisher.subscribe(self.OnDisableStyle, "Disable style")
-        self._publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
-        self._publisher.subscribe(self.AddActors, "Add actors " + str(const.SURFACE))
-        self._publisher.subscribe(self.RemoveActors, "Remove actors " + str(const.SURFACE))
-        self._publisher.subscribe(self.OnShowText, "Show text actors on viewers")
-        self._publisher.subscribe(self.OnShowRuler, "Show rulers on viewers")
-        self._publisher.subscribe(self.OnHideRuler, "Hide rulers on viewers")
-        self._publisher.subscribe(self.OnRulerVisibilityStatus, "Receive ruler visibility status")
-        self._publisher.subscribe(self.OnShowOrientationCube, "Show orientation cube")
-        self._publisher.subscribe(self.OnCloseProject, "Close project data")
-        self._publisher.subscribe(self.FocusCamera, "Focus volume camera")
-        self._publisher.subscribe(self.RemoveAllActors, "Remove all volume actors")
-        self._publisher.subscribe(self.SetStereoMode, "Set stereo mode")
-        self._publisher.subscribe(self.Reposition3DPlane, "Reposition 3D Plane")
-        self._publisher.subscribe(self.UpdatePointer, "Update volume viewer pointer")
-        self._publisher.subscribe(self.RemoveVolume, "Remove Volume")
-        self._publisher.subscribe(self._EnableSSAO, "Enable SSAO")
-        self._publisher.subscribe(self._DisableSSAO, "Disable SSAO")
-        self._publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")
+        Publisher.subscribe(self.LoadSlicePlane, "Load slice plane")
+        Publisher.subscribe(self.ResetCamClippingRange, "Reset cam clipping range")
+        Publisher.subscribe(self.SendActiveCamera, "Send volume viewer active camera")
+        Publisher.subscribe(self.SendViewerSize, "Send volume viewer size")
+        Publisher.subscribe(self.enable_style, "Enable style")
+        Publisher.subscribe(self.OnDisableStyle, "Disable style")
+        Publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
+        Publisher.subscribe(self.AddActors, "Add actors " + str(const.SURFACE))
+        Publisher.subscribe(self.RemoveActors, "Remove actors " + str(const.SURFACE))
+        Publisher.subscribe(self.OnShowText, "Show text actors on viewers")
+        Publisher.subscribe(self.OnShowRuler, "Show rulers on viewers")
+        Publisher.subscribe(self.OnHideRuler, "Hide rulers on viewers")
+        Publisher.subscribe(self.OnRulerVisibilityStatus, "Receive ruler visibility status")
+        Publisher.subscribe(self.OnShowOrientationCube, "Show orientation cube")
+        Publisher.subscribe(self.OnCloseProject, "Close project data")
+        Publisher.subscribe(self.FocusCamera, "Focus volume camera")
+        Publisher.subscribe(self.RemoveAllActors, "Remove all volume actors")
+        Publisher.subscribe(self.SetStereoMode, "Set stereo mode")
+        Publisher.subscribe(self.Reposition3DPlane, "Reposition 3D Plane")
+        Publisher.subscribe(self.UpdatePointer, "Update volume viewer pointer")
+        Publisher.subscribe(self.RemoveVolume, "Remove Volume")
+        Publisher.subscribe(self._EnableSSAO, "Enable SSAO")
+        Publisher.subscribe(self._DisableSSAO, "Disable SSAO")
+        Publisher.subscribe(self._ApplySSAOAfterProjectLoad, "Project loaded successfully")
 
     def _update_fps_visibility(self):
         show_fps = (
@@ -709,8 +707,8 @@ class Base3DView(wx.Panel):
             self.raycasting_volume = False
 
         if self.slice_plane:
-            if hasattr(self._publisher, "unsubscribe_owner"):
-                self._publisher.unsubscribe_owner(self.slice_plane)
+            if self._event_router is not None:
+                self._event_router.unsubscribe_owner(self.slice_plane)
             self.slice_plane.Disable()
             self.slice_plane.DeletePlanes()
             del self.slice_plane
@@ -923,12 +921,14 @@ class Base3DView(wx.Panel):
         if cleanup:
             self.style.CleanUp()
 
-        if self.style is not None and hasattr(self._publisher, "unsubscribe_owner"):
-            self._publisher.unsubscribe_owner(self.style)
+        if self.style is not None and self._event_router is not None:
+            self._event_router.unsubscribe_owner(self.style)
 
         del self.style
 
         style = styles.Styles.get_style(state)(self)
+        if self._event_router is not None:
+            self._event_router.manage(style)
 
         setup = getattr(style, "SetUp", None)
         if setup:
@@ -1091,13 +1091,15 @@ class Base3DView(wx.Panel):
 
     def LoadSlicePlane(self):
         if self.slice_plane:
-            if hasattr(self._publisher, "unsubscribe_owner"):
-                self._publisher.unsubscribe_owner(self.slice_plane)
+            if self._event_router is not None:
+                self._event_router.unsubscribe_owner(self.slice_plane)
             for plane in self._slice_widgets():
                 plane.SetEnabled(0)
                 plane.SetInteractor(None)
         self._plane_visibility = (0, 0, 0)
-        self.slice_plane = SlicePlane(publisher=self._publisher, interactor=self.interactor)
+        self.slice_plane = SlicePlane(interactor=self.interactor)
+        if self._event_router is not None:
+            self._event_router.manage(self.slice_plane)
         for plane in self._slice_widgets():
             plane.SetDefaultRenderer(self.ren)
             plane.SetCurrentRenderer(self.ren)
@@ -1584,8 +1586,7 @@ class Base3DView(wx.Panel):
 
 
 class SlicePlane:
-    def __init__(self, *, publisher=None, interactor=None):
-        self._publisher = publisher if publisher is not None else Publisher
+    def __init__(self, *, interactor=None):
         self.interactor = interactor
         project = prj.Project()
         self.original_orientation = project.original_orientation
@@ -1594,10 +1595,10 @@ class SlicePlane:
         self.__bind_evt()
 
     def __bind_evt(self):
-        self._publisher.subscribe(self.Enable, "Enable plane")
-        self._publisher.subscribe(self.Disable, "Disable plane")
-        self._publisher.subscribe(self.ChangeSlice, "Change slice from slice plane")
-        self._publisher.subscribe(self.UpdateAllSlice, "Update all slice")
+        Publisher.subscribe(self.Enable, "Enable plane")
+        Publisher.subscribe(self.Disable, "Disable plane")
+        Publisher.subscribe(self.ChangeSlice, "Change slice from slice plane")
+        Publisher.subscribe(self.UpdateAllSlice, "Update all slice")
 
     def Create(self):
         plane_x = self.plane_x = vtkImagePlaneWidget()

@@ -56,14 +56,12 @@ class VolumeViewHost(wx.Panel):
 
         self.volume_events = ViewEventRouter(PROJECT_TOPICS)
         self.navigation_events = ViewEventRouter(PROJECT_TOPICS | NAVIGATION_DATA_TOPICS)
-        self.volume_view = VolumeView(
-            self, interactor=self.interactor, publisher=self.volume_events
-        )
+        self.volume_view = VolumeView(self, interactor=self.interactor)
+        self.volume_events.manage_view(self.volume_view)
         # Preserve access to export and mask tools while in navigation mode.
         # Viewer is the existing NavigationView + VolumeView specialization.
-        self.navigation_view = Viewer(
-            self, interactor=self.interactor, publisher=self.navigation_events
-        )
+        self.navigation_view = Viewer(self, interactor=self.interactor)
+        self.navigation_events.manage_view(self.navigation_view)
         self.volume_view.Hide()
         self.navigation_view.Hide()
         self.active_view = None
@@ -82,7 +80,7 @@ class VolumeViewHost(wx.Panel):
         if next_view is self.active_view:
             return
         if self.active_view is not None:
-            self.active_view._publisher.active = False
+            self.active_view._event_router.active = False
             self.active_view.set_active(False)
         if status and not self._navigation_visited:
             if not next_view.target_mode:
@@ -90,7 +88,7 @@ class VolumeViewHost(wx.Panel):
             self._navigation_visited = True
         self.active_view = next_view
         next_view.SetSize(self.GetClientSize())
-        next_view._publisher.active = True
+        next_view._event_router.active = True
         next_view.set_active(True)
         Publisher.sendMessage("Send orientation cube visibility status")
         Publisher.sendMessage("Send ruler visibility status")

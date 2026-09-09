@@ -8,8 +8,7 @@ class VectorFieldVisualizer:
     A class for visualizing vector fields relative to, e.g., the coil or markers in the volume viewer.
     """
 
-    def __init__(self, actor_factory, *, publisher=None):
-        self._publisher = publisher if publisher is not None else Publisher
+    def __init__(self, actor_factory):
         # The actor factory is used to create the actors for representing the vectors (= arrows).
         self.actor_factory = actor_factory
 
@@ -19,7 +18,7 @@ class VectorFieldVisualizer:
         self.__bind_events()
 
     def __bind_events(self):
-        self._publisher.subscribe(self.SetVectorField, "Set vector field")
+        Publisher.subscribe(self.SetVectorField, "Set vector field")
 
     def SetVectorField(self, vector_field):
         """
