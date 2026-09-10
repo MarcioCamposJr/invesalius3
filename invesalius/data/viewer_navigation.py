@@ -94,6 +94,23 @@ class NavigationView(VolumeView):
 
         self.interactor.GetRenderWindow().AddRenderer(self.target_guide_renderer)
 
+    def _apply_scene_viewport(self):
+        super()._apply_scene_viewport()
+        if self.target_mode:
+            self._set_renderer_viewport(self.ren, (0.0, 0.0, 0.75, 1.0))
+            self._set_renderer_viewport(self.target_guide_renderer, (0.75, 0.0, 1.0, 1.0))
+        else:
+            self._set_renderer_viewport(self.target_guide_renderer, (0.0, 0.0, 1.0, 1.0))
+
+        for name, viewport in (
+            ("ren_probe", (0.01, 0.79, 0.15, 0.97)),
+            ("ren_ref", (0.01, 0.57, 0.15, 0.79)),
+            ("ren_obj", (0.01, 0.40, 0.15, 0.57)),
+        ):
+            renderer = getattr(self, name, None)
+            if renderer is not None:
+                self._set_renderer_viewport(renderer, viewport)
+
     def _initialize_navigation_state(self):
         self.obj_axes = None
         self.coil_path = False
@@ -325,7 +342,7 @@ class NavigationView(VolumeView):
         self.ren_probe.SetLayer(1)
 
         self._add_scene_renderer(self.ren_probe)
-        self.ren_probe.SetViewport(0.01, 0.79, 0.15, 0.97)
+        self._set_renderer_viewport(self.ren_probe, (0.01, 0.79, 0.15, 0.97))
         filename = os.path.join(inv_paths.OBJ_DIR, "stylus.stl")
 
         reader = vtkSTLReader()
@@ -351,7 +368,7 @@ class NavigationView(VolumeView):
         self.ren_ref.SetLayer(1)
 
         self._add_scene_renderer(self.ren_ref)
-        self.ren_ref.SetViewport(0.01, 0.57, 0.15, 0.79)
+        self._set_renderer_viewport(self.ren_ref, (0.01, 0.57, 0.15, 0.79))
         filename = os.path.join(inv_paths.OBJ_DIR, "head.stl")
 
         reader = vtkSTLReader()
@@ -377,7 +394,7 @@ class NavigationView(VolumeView):
         self.ren_obj.SetLayer(1)
 
         self._add_scene_renderer(self.ren_obj)
-        self.ren_obj.SetViewport(0.01, 0.40, 0.15, 0.57)
+        self._set_renderer_viewport(self.ren_obj, (0.01, 0.40, 0.15, 0.57))
         filename = os.path.join(inv_paths.OBJ_DIR, "magstim_fig8_coil_no_handle.stl")
 
         reader = vtkSTLReader()
@@ -551,9 +568,8 @@ class NavigationView(VolumeView):
 
         self.coil_visualizer.AddTargetCoil(self.m_target)
 
-        # Set viewports to separate the target guide from the volume.
-        self.ren.SetViewport(0, 0, 0.75, 1)
-        self.target_guide_renderer.SetViewport(0.75, 0, 1, 1)
+        # Separate the target guide inside this navigation scene's viewport.
+        self._apply_scene_viewport()
 
         # Remove the previous actor for 'distance' text
         if self.distance_text is not None:
@@ -593,6 +609,8 @@ class NavigationView(VolumeView):
             self.UpdateRender()
 
     def DisableTargetMode(self):
+        self.target_mode = False
+
         # Restore the camera settings that were stored when the target mode was enabled.
         if self.stored_camera_settings is not None:
             self.ApplyCameraSettings(self.stored_camera_settings)
@@ -608,8 +626,8 @@ class NavigationView(VolumeView):
             self.target_guide_renderer.RemoveActor(actor)
             actor = actors.GetNextItem()
 
-        # Reset viewport to show only the volume.
-        self.ren.SetViewport(0, 0, 1, 1)
+        # Reset the main renderer to this navigation scene's full viewport.
+        self._apply_scene_viewport()
 
         # Remove the actor for 'distance' text.
         if self.distance_text is not None:
@@ -824,7 +842,6 @@ class NavigationView(VolumeView):
     def OnUnsetTarget(self, marker):
         self.DisableTargetMode()
 
-        self.target_mode = False
         self.target_coord = None
 
     def OnSetTarget(self, marker):

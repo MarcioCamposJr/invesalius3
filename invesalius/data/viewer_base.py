@@ -89,6 +89,7 @@ class Base3DView(wx.Panel):
         self._disposed = False
         self._timers = []
         self._ruler_observer_tag = None
+        self._scene_viewport = (0.0, 0.0, 1.0, 1.0)
         display_size = wx.GetDisplaySize()
         # Set the initial volume wx.Panel size as half the screen resolution to fix the issue
         # with small target guide icons when loading a state file with target selected
@@ -314,6 +315,32 @@ class Base3DView(wx.Panel):
             self._scene_renderers.append(renderer)
         if self._view_active:
             self.interactor.GetRenderWindow().AddRenderer(renderer)
+
+    def _map_scene_viewport(self, viewport):
+        scene_x_min, scene_y_min, scene_x_max, scene_y_max = self._scene_viewport
+        x_min, y_min, x_max, y_max = viewport
+        scene_width = scene_x_max - scene_x_min
+        scene_height = scene_y_max - scene_y_min
+        return (
+            scene_x_min + x_min * scene_width,
+            scene_y_min + y_min * scene_height,
+            scene_x_min + x_max * scene_width,
+            scene_y_min + y_max * scene_height,
+        )
+
+    def _set_renderer_viewport(self, renderer, viewport):
+        renderer.SetViewport(*self._map_scene_viewport(viewport))
+
+    def _apply_scene_viewport(self):
+        self._set_renderer_viewport(self.ren, (0.0, 0.0, 1.0, 1.0))
+        self._set_renderer_viewport(self.canvas_renderer, (0.0, 0.0, 1.0, 1.0))
+        if self.orientation_widget is not None:
+            self.orientation_widget.SetViewport(*self._map_scene_viewport((0.85, 0.0, 1.0, 0.15)))
+
+    def SetSceneViewport(self, viewport):
+        """Position this scene inside the shared render window."""
+        self._scene_viewport = tuple(viewport)
+        self._apply_scene_viewport()
 
     def dispose(self):
         if self._disposed:
@@ -560,7 +587,7 @@ class Base3DView(wx.Panel):
 
             widget = vtkOrientationMarkerWidget()
             widget.SetOrientationMarker(assembly)
-            widget.SetViewport(0.85, 0.0, 1.0, 0.15)  # Bottom-right corner
+            widget.SetViewport(*self._map_scene_viewport((0.85, 0.0, 1.0, 0.15)))
             widget.SetInteractor(self.interactor)
             widget.SetEnabled(1)
             widget.InteractiveOff()  # Fixed position – does not move with mouse

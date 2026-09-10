@@ -96,6 +96,7 @@ class VolumeViewHost(wx.Panel):
                     view.ApplyCameraSettings(camera)
             self._navigation_visited = True
 
+        self._configure_viewports(next_views)
         self.active_views = next_views
         self.active_view = next_views[0]
         for view in next_views:
@@ -110,6 +111,11 @@ class VolumeViewHost(wx.Panel):
             viewer_name="Volume",
             caption=_("Navigation") if status else _("Volume"),
         )
+
+    def _configure_viewports(self, views):
+        width = 1.0 / len(views)
+        for index, view in enumerate(views):
+            view.SetSceneViewport((index * width, 0.0, (index + 1) * width, 1.0))
 
     def OnSize(self, evt):
         for view in (self.volume_view, *self.navigation_views):
