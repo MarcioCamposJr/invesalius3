@@ -95,11 +95,7 @@ PROP_MEASURE = 0.8
 
 
 class VolumeView(wx.Panel):
-    """General 3D scene, rendering infrastructure and volume tools.
-
-    NavigationView specializes this class with tracking and target guidance.
-    Hosted scenes borrow an interactor; standalone views create their own.
-    """
+    """General 3D scene, rendering infrastructure and volume tools."""
 
     def __init__(self, parent, *, interactor=None):
         self._event_router = None
@@ -120,10 +116,7 @@ class VolumeView(wx.Panel):
 
         self.initial_focus = None
 
-        self._initialize_navigation_data()
-
         self.style = None
-        self._initialize_sensor_data()
 
         owns_interactor = interactor is None
         if owns_interactor:
@@ -133,6 +126,7 @@ class VolumeView(wx.Panel):
         self.interactor.SetRenderWhenDisabled(True)
 
         self.nav_status = False
+        self.target_mode = False
 
         self.enable_style(const.STATE_DEFAULT)
 
@@ -155,8 +149,6 @@ class VolumeView(wx.Panel):
 
         ren = vtkRenderer()
         self.ren = ren
-
-        self._create_navigation_renderer()
 
         canvas_renderer = vtkRenderer()
         canvas_renderer.SetLayer(1)
@@ -225,12 +217,8 @@ class VolumeView(wx.Panel):
         # camera. When disabling target mode, the stored camera settings are used to restore the camera.
         self.stored_camera_settings = None
 
-        self._initialize_navigation_state()
-
         self.surface = None
         self.surface_geometry = SurfaceGeometry()
-
-        self._initialize_navigation_visualizers()
 
         # SSAO state tracking
         self.ssao_enabled = False
@@ -248,7 +236,6 @@ class VolumeView(wx.Panel):
             if renderer not in previous_renderers:
                 self.renderers.append(renderer)
 
-        self._initialize_navigation_ui()
         self._update_fps_visibility()
         # Request the orientation cube visibility status with a small delay
         # to ensure the interactor has time to initialize during app startup.
@@ -348,6 +335,23 @@ class VolumeView(wx.Panel):
         self._scene_viewport = tuple(viewport)
         self._apply_scene_viewport()
 
+    def capture_state(self):
+        """Capture the general-view state changed while navigation is active."""
+        return {
+            "camera": self.GetCameraSettings(),
+            "interaction_stack": self.interaction_style.stack.copy(),
+            "scene_viewport": self._scene_viewport,
+        }
+
+    def restore_state(self, state):
+        """Restore the relevant general-view state after leaving navigation."""
+        if state is None:
+            return
+        self.ApplyCameraSettings(state["camera"])
+        self.interaction_style.stack = state["interaction_stack"].copy()
+        self.SetInteractorStyle(self.interaction_style.GetActualState())
+        self.SetSceneViewport(state["scene_viewport"])
+
     def dispose(self):
         if self._disposed:
             return
@@ -367,24 +371,6 @@ class VolumeView(wx.Panel):
                 plane.SetInteractor(None)
         if self._event_router is not None:
             self._event_router.dispose()
-
-    def _initialize_navigation_data(self):
-        pass
-
-    def _initialize_sensor_data(self):
-        pass
-
-    def _create_navigation_renderer(self):
-        self.target_guide_renderer = None
-
-    def _initialize_navigation_state(self):
-        self.target_mode = False
-
-    def _initialize_navigation_visualizers(self):
-        pass
-
-    def _initialize_navigation_ui(self):
-        pass
 
     def _bind_events(self):
         Publisher.subscribe(self.AddSurface, "Load surface actor into viewer")

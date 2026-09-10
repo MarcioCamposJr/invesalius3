@@ -62,7 +62,6 @@ import invesalius.data.vtk_utils as vtku
 import invesalius.session as ses
 from invesalius import inv_paths
 from invesalius.data.actor_factory import ActorFactory
-from invesalius.data.viewer_volume import VolumeView
 from invesalius.data.visualization.coil_visualizer import CoilVisualizer
 from invesalius.data.visualization.marker_visualizer import MarkerVisualizer
 from invesalius.data.visualization.probe_visualizer import ProbeVisualizer
@@ -74,8 +73,154 @@ from invesalius.navigation.robot import Robots
 from invesalius.pubsub import pub as Publisher
 
 
-class NavigationView(VolumeView):
-    """Tracking, target guidance and navigation field visualization."""
+class NavigationRenderer:
+    """Track navigation props added to the volume renderer."""
+
+    def __init__(self, renderer):
+        self.renderer = renderer
+        self._active = False
+        self._props = {}
+
+    def __getattr__(self, name):
+        return getattr(self.renderer, name)
+
+    def _add(self, method, prop):
+        is_new = not self.renderer.HasViewProp(prop)
+        getattr(self.renderer, method)(prop)
+        if is_new:
+            self._props[prop] = prop.GetVisibility()
+            if not self._active:
+                prop.SetVisibility(False)
+
+    def _remove(self, method, prop):
+        getattr(self.renderer, method)(prop)
+        self._props.pop(prop, None)
+
+    def AddActor(self, actor):
+        self._add("AddActor", actor)
+
+    def AddActor2D(self, actor):
+        self._add("AddActor2D", actor)
+
+    def AddViewProp(self, prop):
+        self._add("AddViewProp", prop)
+
+    def RemoveActor(self, actor):
+        self._remove("RemoveActor", actor)
+
+    def RemoveActor2D(self, actor):
+        self._remove("RemoveActor2D", actor)
+
+    def RemoveViewProp(self, prop):
+        self._remove("RemoveViewProp", prop)
+
+    def set_active(self, active):
+        if self._active == active:
+            return
+        if active:
+            for prop, visibility in self._props.items():
+                prop.SetVisibility(visibility)
+        else:
+            for prop in self._props:
+                self._props[prop] = prop.GetVisibility()
+                prop.SetVisibility(False)
+        self._active = active
+
+
+class NavigationController:
+    """Add navigation behavior to an existing :class:`VolumeView`."""
+
+    def __init__(self, view):
+        self.view = view
+        self._event_router = None
+        self._active = False
+        self._disposed = False
+        self._volume_state = None
+        self._navigation_camera_settings = None
+        self._navigation_interaction_state = None
+        self._navigation_renderers = []
+        self.ren = NavigationRenderer(view.ren)
+
+        self._initialize_navigation_data()
+        self._initialize_sensor_data()
+        self._initialize_navigation_state()
+        self._initialize_navigation_visualizers()
+        self._create_navigation_renderer()
+        self._initialize_navigation_ui()
+        self._bind_events()
+        self._update_fps_visibility()
+
+    def __getattr__(self, name):
+        """Use rendering and general-view operations from the owned view."""
+        return getattr(self.view, name)
+
+    @property
+    def nav_status(self):
+        return self.view.nav_status
+
+    @nav_status.setter
+    def nav_status(self, value):
+        self.view.nav_status = value
+
+    @property
+    def target_mode(self):
+        return self.view.target_mode
+
+    @target_mode.setter
+    def target_mode(self, value):
+        self.view.target_mode = value
+
+    def activate(self):
+        if self._disposed or self._active:
+            return
+        self._volume_state = self.view.capture_state()
+        if self._navigation_camera_settings is not None:
+            self.view.ApplyCameraSettings(self._navigation_camera_settings)
+        if self._navigation_interaction_state is not None:
+            self.view.interaction_style.stack = self._navigation_interaction_state.copy()
+            self.view.SetInteractorStyle(self.view.interaction_style.GetActualState())
+        self._active = True
+        self.ren.set_active(True)
+        window = self.interactor.GetRenderWindow()
+        for renderer in self._navigation_renderers:
+            window.AddRenderer(renderer)
+        self._apply_scene_viewport()
+        self._update_fps_visibility()
+        self.view.UpdateRender()
+
+    def deactivate(self):
+        if not self._active:
+            return
+        self._navigation_camera_settings = self.view.GetCameraSettings()
+        self._navigation_interaction_state = self.view.interaction_style.stack.copy()
+        self._active = False
+        self._update_fps_visibility()
+        self.ren.set_active(False)
+        window = self.interactor.GetRenderWindow()
+        for renderer in self._navigation_renderers:
+            window.RemoveRenderer(renderer)
+        self.view.restore_state(self._volume_state)
+        self._volume_state = None
+        self.view.SetSceneViewport((0.0, 0.0, 1.0, 1.0))
+        self.view.UpdateRender()
+
+    def dispose(self):
+        if self._disposed:
+            return
+        self.deactivate()
+        self._disposed = True
+        self.ren.RemoveActor(self.fps_text.actor)
+
+    def _add_scene_renderer(self, renderer):
+        if renderer not in self._navigation_renderers:
+            self._navigation_renderers.append(renderer)
+        if self._active:
+            self.interactor.GetRenderWindow().AddRenderer(renderer)
+
+    def _remove_scene_renderer(self, renderer):
+        self.interactor.GetRenderWindow().RemoveRenderer(renderer)
+        if renderer in self._navigation_renderers:
+            self._navigation_renderers.remove(renderer)
 
     def _initialize_navigation_data(self):
         self.static_markers_efield = []
@@ -101,12 +246,12 @@ class NavigationView(VolumeView):
         # rendered on top of the volume.
         self.target_guide_renderer = vtkRenderer()
 
-        self.interactor.GetRenderWindow().AddRenderer(self.target_guide_renderer)
+        self._add_scene_renderer(self.target_guide_renderer)
         self.ren.AddActor(self.fps_text.actor)
         self.fps_text.Hide()
 
     def _apply_scene_viewport(self):
-        super()._apply_scene_viewport()
+        self.view._apply_scene_viewport()
         if self.target_mode:
             self._set_renderer_viewport(self.ren, (0.0, 0.0, 0.75, 1.0))
             self._set_renderer_viewport(self.target_guide_renderer, (0.75, 0.0, 1.0, 1.0))
@@ -246,16 +391,23 @@ class NavigationView(VolumeView):
 
     def OnHideText(self):
         self._fps_text_visible = False
-        super().OnHideText()
+        self._update_fps_visibility()
 
     def OnShowText(self):
         self._fps_text_visible = True
-        super().OnShowText()
+        self._update_fps_visibility()
 
     def UpdateRender(self):
-        if self._disposed or not self._view_active:
+        if self._disposed or not self._active:
             return
-        super().UpdateRender()
+        self.view.UpdateRender()
+        self._count_rendered_frame()
+
+    def OnRender(self):
+        if not self._disposed and self._active:
+            self._count_rendered_frame()
+
+    def _count_rendered_frame(self):
         if self.fps_text.actor.GetVisibility():
             end = time.monotonic()
             self._fps_frames += 1
@@ -267,7 +419,9 @@ class NavigationView(VolumeView):
                 self.fps_text.SetValue(f"FPS: {fps:0.1f}")
 
     def _bind_events(self):
-        super()._bind_events()
+        Publisher.subscribe(self.OnHideText, "Hide text actors on viewers")
+        Publisher.subscribe(self.OnShowText, "Show text actors on viewers")
+        Publisher.subscribe(self.OnRender, "Render volume viewer")
         Publisher.subscribe(self.OnSensors, "Sensors ID")
         Publisher.subscribe(self.OnRemoveSensorsID, "Remove sensors ID")
         Publisher.subscribe(self.DeleteEFieldMarkers, "Delete markers")

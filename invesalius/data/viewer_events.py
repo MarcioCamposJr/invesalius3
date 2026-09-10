@@ -65,6 +65,20 @@ class ViewEventRouter:
             if owner is not None:
                 self.manage(owner)
 
+    def manage_navigation_controller(self, controller):
+        controller._event_router = self
+        self.manage(controller)
+        for name in (
+            "coil_visualizer",
+            "marker_visualizer",
+            "probe_visualizer",
+            "robot_force_visualizer",
+            "vector_field_visualizer",
+        ):
+            owner = getattr(controller, name, None)
+            if owner is not None:
+                self.manage(owner)
+
     def unsubscribe_owner(self, owner):
         for listener, topic in list(self._listeners):
             if getattr(listener, "__self__", None) is owner:
