@@ -6,7 +6,8 @@ from vtkmodules.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteracto
 import invesalius.constants as const
 import invesalius.session as ses
 from invesalius.data.viewer_events import ViewEventRouter
-from invesalius.data.viewer_volume import Viewer, VolumeView
+from invesalius.data.viewer_navigation import NavigationView
+from invesalius.data.viewer_volume import VolumeView
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
 
@@ -58,9 +59,8 @@ class VolumeViewHost(wx.Panel):
         self.navigation_events = ViewEventRouter(PROJECT_TOPICS | NAVIGATION_DATA_TOPICS)
         self.volume_view = VolumeView(self, interactor=self.interactor)
         self.volume_events.manage_view(self.volume_view)
-        # Preserve access to export and mask tools while in navigation mode.
-        # Viewer is the existing NavigationView + VolumeView specialization.
-        self.navigation_view = Viewer(self, interactor=self.interactor)
+        # NavigationView inherits the general volume tools and adds navigation state.
+        self.navigation_view = NavigationView(self, interactor=self.interactor)
         self.navigation_events.manage_view(self.navigation_view)
         self.volume_view.Hide()
         self.navigation_view.Hide()

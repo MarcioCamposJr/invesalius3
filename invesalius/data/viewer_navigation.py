@@ -62,7 +62,7 @@ import invesalius.data.vtk_utils as vtku
 import invesalius.session as ses
 from invesalius import inv_paths
 from invesalius.data.actor_factory import ActorFactory
-from invesalius.data.viewer_base import Base3DView
+from invesalius.data.viewer_volume import VolumeView
 from invesalius.data.visualization.coil_visualizer import CoilVisualizer
 from invesalius.data.visualization.marker_visualizer import MarkerVisualizer
 from invesalius.data.visualization.probe_visualizer import ProbeVisualizer
@@ -74,7 +74,7 @@ from invesalius.navigation.robot import Robots
 from invesalius.pubsub import pub as Publisher
 
 
-class NavigationView(Base3DView):
+class NavigationView(VolumeView):
     """Tracking, target guidance and navigation field visualization."""
 
     def _initialize_navigation_data(self):
@@ -234,8 +234,6 @@ class NavigationView(Base3DView):
         Publisher.subscribe(self.UpdateMarkerOffsetState, "Update marker offset state")
         Publisher.subscribe(self.AddPeeledSurface, "Update peel")
         Publisher.subscribe(self.InitEfield, "Initialize E-field brain")
-        Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
-        Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
         Publisher.subscribe(self.GetPeelCenters, "Get peel centers and normals")
         Publisher.subscribe(self.InitLocatorViewer, "Get init locator")
         Publisher.subscribe(self.GetEfieldActor, "Send Actor")
