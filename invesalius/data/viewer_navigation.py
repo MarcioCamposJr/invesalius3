@@ -82,6 +82,15 @@ class NavigationView(VolumeView):
         self.plot_vector = None
         self.efield_data_revision = None
         self.position_max_revision = None
+        self._fps_last_time = time.monotonic()
+        self._fps_frames = 0
+        self._fps_text_visible = True
+        self.fps_text = vtku.Text()
+        self.fps_text.SetSize(const.TEXT_SIZE_SMALL)
+        self.fps_text.SetPosition(
+            (const.TEXT_POS_LEFT_UP[0], min(0.995, const.TEXT_POS_LEFT_UP[1] + 0.02))
+        )
+        self.fps_text.SetValue("FPS: --")
 
     def _initialize_sensor_data(self):
         self.coil_sensor_spheres = []
@@ -93,6 +102,8 @@ class NavigationView(VolumeView):
         self.target_guide_renderer = vtkRenderer()
 
         self.interactor.GetRenderWindow().AddRenderer(self.target_guide_renderer)
+        self.ren.AddActor(self.fps_text.actor)
+        self.fps_text.Hide()
 
     def _apply_scene_viewport(self):
         super()._apply_scene_viewport()
@@ -224,6 +235,36 @@ class NavigationView(VolumeView):
 
     def _initialize_navigation_ui(self):
         Publisher.sendMessage("Press target mode button", pressed=False)
+
+    def _update_fps_visibility(self):
+        show_fps = (
+            self._fps_text_visible
+            and self.nav_status
+            and getattr(self, "state", None) == const.STATE_NAVIGATION
+        )
+        self.fps_text.Show(show_fps)
+
+    def OnHideText(self):
+        self._fps_text_visible = False
+        super().OnHideText()
+
+    def OnShowText(self):
+        self._fps_text_visible = True
+        super().OnShowText()
+
+    def UpdateRender(self):
+        if self._disposed or not self._view_active:
+            return
+        super().UpdateRender()
+        if self.fps_text.actor.GetVisibility():
+            end = time.monotonic()
+            self._fps_frames += 1
+            elapsed = end - self._fps_last_time
+            if elapsed >= 0.5:
+                fps = self._fps_frames / elapsed
+                self._fps_last_time = end
+                self._fps_frames = 0
+                self.fps_text.SetValue(f"FPS: {fps:0.1f}")
 
     def _bind_events(self):
         super()._bind_events()
