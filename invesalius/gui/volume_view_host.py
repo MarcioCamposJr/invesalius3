@@ -56,14 +56,19 @@ class VolumeViewHost(wx.Panel):
         self.SetSizer(sizer)
 
         self.volume_events = ViewEventRouter(PROJECT_TOPICS)
-        self.navigation_events = ViewEventRouter(PROJECT_TOPICS | NAVIGATION_DATA_TOPICS)
         self.volume_view = VolumeView(self, interactor=self.interactor)
         self.volume_events.manage_view(self.volume_view)
+
         # NavigationView inherits the general volume tools and adds navigation state.
         self.navigation_view = NavigationView(self, interactor=self.interactor)
+        self.navigation_events = ViewEventRouter(PROJECT_TOPICS | NAVIGATION_DATA_TOPICS)
         self.navigation_events.manage_view(self.navigation_view)
+        self.navigation_views = [self.navigation_view]
+        self.navigation_event_routers = [self.navigation_events]
+
         self.volume_view.Hide()
         self.navigation_view.Hide()
+        self.active_views = []
         self.active_view = None
         self._navigation_visited = False
         self.Bind(wx.EVT_SIZE, self.OnSize)
@@ -76,20 +81,28 @@ class VolumeViewHost(wx.Panel):
     def SetNavigationMode(self, status):
         if self._disposed:
             return
-        next_view = self.navigation_view if status else self.volume_view
-        if next_view is self.active_view:
+        next_views = self.navigation_views[:1] if status else [self.volume_view]
+        if next_views == self.active_views:
             return
-        if self.active_view is not None:
-            self.active_view._event_router.active = False
-            self.active_view.set_active(False)
+
+        for view in self.active_views:
+            view._event_router.active = False
+            view.set_active(False)
+
         if status and not self._navigation_visited:
-            if not next_view.target_mode:
-                next_view.ApplyCameraSettings(self.volume_view.GetCameraSettings())
+            camera = self.volume_view.GetCameraSettings()
+            for view in next_views:
+                if not view.target_mode:
+                    view.ApplyCameraSettings(camera)
             self._navigation_visited = True
-        self.active_view = next_view
-        next_view.SetSize(self.GetClientSize())
-        next_view._event_router.active = True
-        next_view.set_active(True)
+
+        self.active_views = next_views
+        self.active_view = next_views[0]
+        for view in next_views:
+            view.SetSize(self.GetClientSize())
+            view._event_router.active = True
+            view.set_active(True)
+
         Publisher.sendMessage("Send orientation cube visibility status")
         Publisher.sendMessage("Send ruler visibility status")
         Publisher.sendMessage(
@@ -99,14 +112,15 @@ class VolumeViewHost(wx.Panel):
         )
 
     def OnSize(self, evt):
-        for view in (self.volume_view, self.navigation_view):
+        for view in (self.volume_view, *self.navigation_views):
             view.SetSize(self.GetClientSize())
         evt.Skip()
 
     def OnCloseProject(self):
         self._navigation_visited = False
-        if self.navigation_view.target_coord is not None:
-            self.navigation_view.OnUnsetTarget(None)
+        for view in self.navigation_views:
+            if view.target_coord is not None:
+                view.OnUnsetTarget(None)
 
     def OnDestroy(self, evt):
         if evt.GetEventObject() is self:
@@ -121,9 +135,10 @@ class VolumeViewHost(wx.Panel):
         Publisher.unsubscribe(self.OnCloseProject, "Close project data")
         Publisher.unsubscribe(self.dispose, "Exit")
         self.volume_events.active = False
-        self.navigation_events.active = False
-        # Detach the active scene before disposing the inactive one.
-        if self.active_view is not None:
-            self.active_view.set_active(False)
+        for router in self.navigation_event_routers:
+            router.active = False
+        for view in self.active_views:
+            view.set_active(False)
         self.volume_view.dispose()
-        self.navigation_view.dispose()
+        for view in self.navigation_views:
+            view.dispose()
