@@ -324,7 +324,7 @@ class NavigationView(VolumeView):
         self.ren_probe = vtkRenderer()
         self.ren_probe.SetLayer(1)
 
-        self.interactor.GetRenderWindow().AddRenderer(self.ren_probe)
+        self._add_scene_renderer(self.ren_probe)
         self.ren_probe.SetViewport(0.01, 0.79, 0.15, 0.97)
         filename = os.path.join(inv_paths.OBJ_DIR, "stylus.stl")
 
@@ -350,7 +350,7 @@ class NavigationView(VolumeView):
         self.ren_ref = vtkRenderer()
         self.ren_ref.SetLayer(1)
 
-        self.interactor.GetRenderWindow().AddRenderer(self.ren_ref)
+        self._add_scene_renderer(self.ren_ref)
         self.ren_ref.SetViewport(0.01, 0.57, 0.15, 0.79)
         filename = os.path.join(inv_paths.OBJ_DIR, "head.stl")
 
@@ -376,7 +376,7 @@ class NavigationView(VolumeView):
         self.ren_obj = vtkRenderer()
         self.ren_obj.SetLayer(1)
 
-        self.interactor.GetRenderWindow().AddRenderer(self.ren_obj)
+        self._add_scene_renderer(self.ren_obj)
         self.ren_obj.SetViewport(0.01, 0.40, 0.15, 0.57)
         filename = os.path.join(inv_paths.OBJ_DIR, "magstim_fig8_coil_no_handle.stl")
 

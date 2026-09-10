@@ -241,8 +241,6 @@ class Base3DView(wx.Panel):
             if renderer not in previous_renderers:
                 self.renderers.append(renderer)
 
-        print(len(self.renderers))
-
         self._initialize_navigation_ui()
         self._update_fps_visibility()
         # Request the orientation cube visibility status with a small delay
@@ -283,7 +281,6 @@ class Base3DView(wx.Panel):
                 self.style = None
             self.interactor.SetInteractorStyle(None)
             self.canvas.set_mouse_events_enabled(False)
-            self._scene_renderers = list(window.GetRenderers())
             for renderer in self._scene_renderers:
                 window.RemoveRenderer(renderer)
         else:
@@ -311,6 +308,12 @@ class Base3DView(wx.Panel):
         self.interactor.GetRenderWindow().RemoveRenderer(renderer)
         if renderer in self._scene_renderers:
             self._scene_renderers.remove(renderer)
+
+    def _add_scene_renderer(self, renderer):
+        if renderer not in self._scene_renderers:
+            self._scene_renderers.append(renderer)
+        if self._view_active:
+            self.interactor.GetRenderWindow().AddRenderer(renderer)
 
     def dispose(self):
         if self._disposed:
