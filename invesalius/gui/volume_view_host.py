@@ -26,23 +26,6 @@ PROJECT_TOPICS = {
     "Load slice plane",
 }
 
-NAVIGATION_DATA_TOPICS = {
-    "Navigation status",
-    "Add marker",
-    "Update marker",
-    "Delete markers",
-    "Delete marker",
-    "Set target",
-    "Unset target",
-    "Set target transparency",
-    "Set target mode",
-    "Reset coil selection",
-    "Select coil",
-    "Set vector field",
-    "Update vector field",
-    "Remove sensors ID",
-}
-
 
 class VolumeViewHost(wx.Panel):
     """Own one interactor, one volume view and its navigation controller."""
@@ -63,7 +46,7 @@ class VolumeViewHost(wx.Panel):
 
         self.navigation = NavigationController(self.volume_view)
         self.navigation_view = self.navigation
-        self.navigation_events = ViewEventRouter(NAVIGATION_DATA_TOPICS)
+        self.navigation_events = ViewEventRouter()
         self.navigation_events.manage_navigation_controller(self.navigation)
 
         self.volume_view.Hide()

@@ -139,6 +139,8 @@ class NavigationController:
         self._navigation_camera_settings = None
         self._navigation_interaction_state = None
         self._navigation_renderers = []
+        self._nav_status = False
+        self._target_mode = False
         self.ren = NavigationRenderer(view.ren)
 
         self._initialize_navigation_data()
@@ -156,19 +158,23 @@ class NavigationController:
 
     @property
     def nav_status(self):
-        return self.view.nav_status
+        return self._nav_status
 
     @nav_status.setter
     def nav_status(self, value):
-        self.view.nav_status = value
+        self._nav_status = value
+        if self._active:
+            self.view.nav_status = value
 
     @property
     def target_mode(self):
-        return self.view.target_mode
+        return self._target_mode
 
     @target_mode.setter
     def target_mode(self, value):
-        self.view.target_mode = value
+        self._target_mode = value
+        if self._active:
+            self.view.target_mode = value
 
     def activate(self):
         if self._disposed or self._active:
@@ -180,6 +186,8 @@ class NavigationController:
             self.view.interaction_style.stack = self._navigation_interaction_state.copy()
             self.view.SetInteractorStyle(self.view.interaction_style.GetActualState())
         self._active = True
+        self.view.nav_status = self.nav_status
+        self.view.target_mode = self.target_mode
         self.ren.set_active(True)
         window = self.interactor.GetRenderWindow()
         for renderer in self._navigation_renderers:
@@ -194,6 +202,8 @@ class NavigationController:
         self._navigation_camera_settings = self.view.GetCameraSettings()
         self._navigation_interaction_state = self.view.interaction_style.stack.copy()
         self._active = False
+        self.view.nav_status = False
+        self.view.target_mode = False
         self._update_fps_visibility()
         self.ren.set_active(False)
         window = self.interactor.GetRenderWindow()
