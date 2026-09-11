@@ -61,7 +61,6 @@ import invesalius.data.transformations as tr
 import invesalius.data.vtk_utils as vtku
 import invesalius.session as ses
 from invesalius import inv_paths
-from invesalius.data.actor_factory import ActorFactory
 from invesalius.data.visualization.coil_visualizer import CoilVisualizer
 from invesalius.data.visualization.marker_visualizer import MarkerVisualizer
 from invesalius.data.visualization.probe_visualizer import ProbeVisualizer
@@ -119,6 +118,8 @@ class NavigationRenderer:
             return
         if active:
             for prop, visibility in self._props.items():
+                if not self.renderer.HasViewProp(prop):
+                    self.renderer.AddViewProp(prop)
                 prop.SetVisibility(visibility)
         else:
             for prop in self._props:
@@ -255,6 +256,7 @@ class NavigationController:
         # Render the target guide in a separate renderer, so that it can be
         # rendered on top of the volume.
         self.target_guide_renderer = vtkRenderer()
+        self.view.target_guide_renderer = self.target_guide_renderer
 
         self._add_scene_renderer(self.target_guide_renderer)
         self.ren.AddActor(self.fps_text.actor)
@@ -329,9 +331,6 @@ class NavigationController:
 
     def _initialize_navigation_visualizers(self):
         self.projection_actor = None
-
-        # An object that can be used to create actors, such as lines, arrows, and spheres.
-        self.actor_factory = ActorFactory()
 
         # An object that can be used to create vector fields in the 3D viewer.
         self.vector_field_visualizer = VectorFieldVisualizer(

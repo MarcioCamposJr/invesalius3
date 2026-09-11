@@ -71,6 +71,7 @@ import invesalius.project as prj
 import invesalius.session as ses
 import invesalius.style as st
 import invesalius.utils as utils
+from invesalius.data.actor_factory import ActorFactory
 from invesalius.data.markers.surface_geometry import SurfaceGeometry
 from invesalius.data.ruler_volume import GenericLeftRulerVolume
 from invesalius.gui.widgets.canvas_renderer import CanvasRendererCTX
@@ -115,6 +116,7 @@ class VolumeView(wx.Panel):
         self.interaction_style = st.StyleStateManager()
 
         self.initial_focus = None
+        self.actor_factory = ActorFactory()
 
         self.style = None
 
@@ -149,6 +151,7 @@ class VolumeView(wx.Panel):
 
         ren = vtkRenderer()
         self.ren = ren
+        self.target_guide_renderer = None
 
         canvas_renderer = vtkRenderer()
         canvas_renderer.SetLayer(1)
