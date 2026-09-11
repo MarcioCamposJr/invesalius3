@@ -134,7 +134,7 @@ class NavigationRenderer:
         self._active = False
 
 
-class NavigationController:
+class NavigationView:
     """Add navigation behavior to an existing volume viewer."""
 
     def __init__(self, view):

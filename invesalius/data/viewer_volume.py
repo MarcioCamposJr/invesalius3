@@ -395,9 +395,9 @@ class Viewer(wx.Panel):
             return
 
         if status:
-            from invesalius.data.viewer_navigation import NavigationController
+            from invesalius.data.viewer_navigation import NavigationView
 
-            self.navigation = NavigationController(self)
+            self.navigation = NavigationView(self)
             self.navigation.activate()
             self.active_view = self.navigation
         else:
