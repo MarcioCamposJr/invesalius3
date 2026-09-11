@@ -4,7 +4,6 @@ from unittest.mock import call
 
 import pytest
 
-from invesalius.data.viewer_events import ViewEventRouter
 from invesalius.pubsub.pub import (
     add_sendMessage_hook,
     sendMessage,
@@ -78,53 +77,6 @@ def test_send_message_hook_is_called(mocker):
     # Since hook1 was overwritten, it should NOT be called
     mock_hook1.assert_not_called()
     mock_hook2.assert_called_once_with("test_topic", {"key": "value"})
-
-
-def test_view_event_router_suspends_inactive_scene_events():
-    router = ViewEventRouter({"test.scene.model"})
-    received = []
-
-    class View:
-        def on_model(self, value):
-            received.append(("model", value))
-
-        def on_interaction(self, value):
-            received.append(("interaction", value))
-
-    view = View()
-    subscribe(view.on_model, "test.scene.model")
-    subscribe(view.on_interaction, "test.scene.interaction")
-    try:
-        router.manage(view)
-        sendMessage("test.scene.model", value=1)
-        sendMessage("test.scene.interaction", value=2)
-        assert received == [("model", 1)]
-
-        router.active = True
-        sendMessage("test.scene.interaction", value=3)
-        assert received == [("model", 1), ("interaction", 3)]
-    finally:
-        router.dispose()
-
-
-def test_view_event_router_keeps_unmanaged_listeners_active():
-    router = ViewEventRouter()
-    received = []
-
-    class Listener:
-        def update(self, value):
-            received.append((self, value))
-
-    scene, shared_model = Listener(), Listener()
-    subscribe(scene.update, "test.scene.shared")
-    subscribe(shared_model.update, "test.scene.shared")
-    try:
-        router.manage(scene)
-        sendMessage("test.scene.shared", value=1)
-        assert received == [(shared_model, 1)]
-    finally:
-        router.dispose()
-        unsubscribe(shared_model.update, "test.scene.shared")
 
 
 def test_unsubscribe_owner_filters_bound_methods_by_owner(mock_publisher, mocker):

@@ -139,7 +139,6 @@ class NavigationController:
 
     def __init__(self, view):
         self.view = view
-        self._event_router = None
         self._active = False
         self._disposed = False
         self._volume_state = None

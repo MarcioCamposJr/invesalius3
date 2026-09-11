@@ -5,26 +5,10 @@ from vtkmodules.wx.wxVTKRenderWindowInteractor import wxVTKRenderWindowInteracto
 
 import invesalius.constants as const
 import invesalius.session as ses
-from invesalius.data.viewer_events import ViewEventRouter
 from invesalius.data.viewer_navigation import NavigationController
 from invesalius.data.viewer_volume import VolumeView
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
-
-# Keep project data synchronized without sending user interaction or pose updates
-# to a detached scene. The actors supplied by the project remain shared.
-PROJECT_TOPICS = {
-    "Load surface actor into viewer",
-    "Remove surface actor from viewer",
-    "Load volume into viewer",
-    "Unload volume",
-    "Remove Volume",
-    "Add actors " + str(const.SURFACE),
-    "Remove actors " + str(const.SURFACE),
-    "Remove all volume actors",
-    "Close project data",
-    "Load slice plane",
-}
 
 
 class VolumeViewHost(wx.Panel):
@@ -38,10 +22,7 @@ class VolumeViewHost(wx.Panel):
         sizer.Add(self.interactor, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
-        self.volume_events = ViewEventRouter(PROJECT_TOPICS)
         self.volume_view = VolumeView(self, interactor=self.interactor)
-        self.volume_events.manage_view(self.volume_view)
-        self.volume_events.active = True
         self.volume_view.set_active(True)
 
         self.navigation = None
@@ -107,7 +88,6 @@ class VolumeViewHost(wx.Panel):
         Publisher.unsubscribe(self.SetNavigationMode, "Set navigation mode")
         Publisher.unsubscribe(self.OnCloseProject, "Close project data")
         Publisher.unsubscribe(self.dispose, "Exit")
-        self.volume_events.active = False
         if self.navigation is not None:
             self.navigation.dispose()
             self.navigation = None

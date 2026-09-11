@@ -99,7 +99,6 @@ class VolumeView(wx.Panel):
     """General 3D scene, rendering infrastructure and volume tools."""
 
     def __init__(self, parent, *, interactor=None):
-        self._event_router = None
         self._view_active = interactor is None
         self._disposed = False
         self._timers = []
@@ -281,8 +280,7 @@ class VolumeView(wx.Panel):
                 cleanup = getattr(self.style, "CleanUp", None)
                 if cleanup:
                     cleanup()
-                if self._event_router is not None:
-                    self._event_router.unsubscribe_owner(self.style)
+                Publisher.unsubscribe_owner(self.style)
                 self.style = None
             self.interactor.SetInteractorStyle(None)
             self.canvas.set_mouse_events_enabled(False)
@@ -379,8 +377,6 @@ class VolumeView(wx.Panel):
         self._timers.clear()
         self.canvas.set_mouse_events_enabled(False)
         if self.slice_plane:
-            if self._event_router is not None:
-                self._event_router.unsubscribe_owner(self.slice_plane)
             self.slice_plane.dispose()
             self.slice_plane = None
         if self.orientation_widget is not None:
@@ -400,8 +396,6 @@ class VolumeView(wx.Panel):
             except Exception:
                 pass
             self._ruler_observer_tag = None
-        if self._event_router is not None:
-            self._event_router.dispose()
 
     def OnDestroy(self, evt):
         if evt.GetEventObject() is self:
@@ -766,8 +760,6 @@ class VolumeView(wx.Panel):
             self.raycasting_volume = False
 
         if self.slice_plane:
-            if self._event_router is not None:
-                self._event_router.unsubscribe_owner(self.slice_plane)
             self.slice_plane.dispose()
             Publisher.sendMessage("Uncheck image plane menu")
             self.mouse_pressed = 0
@@ -976,14 +968,12 @@ class VolumeView(wx.Panel):
         if cleanup:
             self.style.CleanUp()
 
-        if self.style is not None and self._event_router is not None:
-            self._event_router.unsubscribe_owner(self.style)
+        if self.style is not None:
+            Publisher.unsubscribe_owner(self.style)
 
         del self.style
 
         style = styles.Styles.get_style(state)(self)
-        if self._event_router is not None:
-            self._event_router.manage(style)
 
         setup = getattr(style, "SetUp", None)
         if setup:
@@ -1146,13 +1136,9 @@ class VolumeView(wx.Panel):
 
     def LoadSlicePlane(self):
         if self.slice_plane:
-            if self._event_router is not None:
-                self._event_router.unsubscribe_owner(self.slice_plane)
             self.slice_plane.dispose()
         self._plane_visibility = (0, 0, 0)
         self.slice_plane = SlicePlane(interactor=self.interactor)
-        if self._event_router is not None:
-            self._event_router.manage(self.slice_plane)
         for plane in self._slice_widgets():
             plane.SetDefaultRenderer(self.ren)
             plane.SetCurrentRenderer(self.ren)
