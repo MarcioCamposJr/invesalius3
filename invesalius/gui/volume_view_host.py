@@ -28,7 +28,7 @@ PROJECT_TOPICS = {
 
 
 class VolumeViewHost(wx.Panel):
-    """Own one interactor, one volume view and its navigation controller."""
+    """Own one interactor, one volume view and navigation while it is active."""
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -44,10 +44,8 @@ class VolumeViewHost(wx.Panel):
         self.volume_events.active = True
         self.volume_view.set_active(True)
 
-        self.navigation = NavigationController(self.volume_view)
-        self.navigation_view = self.navigation
-        self.navigation_events = ViewEventRouter()
-        self.navigation_events.manage_navigation_controller(self.navigation)
+        self.navigation = None
+        self.navigation_view = None
 
         self.volume_view.Hide()
         self.active_views = [self.volume_view]
@@ -68,12 +66,15 @@ class VolumeViewHost(wx.Panel):
             return
 
         if status:
+            self.navigation = NavigationController(self.volume_view)
+            self.navigation_view = self.navigation
             self.navigation.activate()
-            self.navigation_events.active = True
             self.active_view = self.navigation
         else:
-            self.navigation_events.active = False
-            self.navigation.deactivate()
+            if self.navigation is not None:
+                self.navigation.dispose()
+                self.navigation = None
+                self.navigation_view = None
             self.active_view = self.volume_view
         self._navigation_mode = status
         self.volume_view.SetSize(self.GetClientSize())
@@ -91,7 +92,7 @@ class VolumeViewHost(wx.Panel):
         evt.Skip()
 
     def OnCloseProject(self):
-        if self.navigation.target_coord is not None:
+        if self.navigation is not None and self.navigation.target_coord is not None:
             self.navigation.OnUnsetTarget(None)
 
     def OnDestroy(self, evt):
@@ -107,9 +108,10 @@ class VolumeViewHost(wx.Panel):
         Publisher.unsubscribe(self.OnCloseProject, "Close project data")
         Publisher.unsubscribe(self.dispose, "Exit")
         self.volume_events.active = False
-        self.navigation_events.active = False
-        self.navigation_events.dispose()
-        self.navigation.dispose()
+        if self.navigation is not None:
+            self.navigation.dispose()
+            self.navigation = None
+            self.navigation_view = None
         self.volume_view.dispose()
         try:
             self.interactor.Disable()

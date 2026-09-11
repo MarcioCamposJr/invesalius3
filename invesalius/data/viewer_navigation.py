@@ -127,6 +127,12 @@ class NavigationRenderer:
                 prop.SetVisibility(False)
         self._active = active
 
+    def dispose(self):
+        for prop in self._props:
+            self.renderer.RemoveViewProp(prop)
+        self._props.clear()
+        self._active = False
+
 
 class NavigationController:
     """Add navigation behavior to an existing :class:`VolumeView`."""
@@ -151,6 +157,7 @@ class NavigationController:
         self._create_navigation_renderer()
         self._initialize_navigation_ui()
         self._bind_events()
+        self._restore_navigation_markers()
         self._update_fps_visibility()
 
     def __getattr__(self, name):
@@ -219,12 +226,17 @@ class NavigationController:
             return
         self.deactivate()
         self._disposed = True
+        Publisher.unsubscribe_owner(self)
         self.marker_visualizer.dispose()
         self.coil_visualizer.dispose()
         self.probe_visualizer.dispose()
         self.robot_force_visualizer.dispose()
         self.vector_field_visualizer.dispose()
-        self.ren.RemoveActor(self.fps_text.actor)
+        self.ren.dispose()
+        for renderer in self._navigation_renderers:
+            self._detach_renderer(renderer)
+        self._navigation_renderers.clear()
+        self.view.target_guide_renderer = None
 
     def _add_scene_renderer(self, renderer):
         if renderer not in self._navigation_renderers:
@@ -368,6 +380,8 @@ class NavigationController:
 
         self.probe_visualizer = ProbeVisualizer(self.ren)
         self.robot_force_visualizer = RobotForceVisualizer(self.interactor)
+        self._navigation_renderers.append(self.robot_force_visualizer.ren_force)
+        self._detach_renderer(self.robot_force_visualizer.ren_force)
         self.robots = Robots()
 
         self.seed_offset = const.SEED_OFFSET
@@ -400,6 +414,15 @@ class NavigationController:
         self.save_automatically = False
         self.positions_above_threshold = None
         self.cell_id_indexes_above_threshold = None
+
+    def _restore_navigation_markers(self):
+        from invesalius.navigation.markers import MarkersControl
+
+        for marker in MarkersControl().list:
+            self.marker_visualizer.AddMarker(marker, render=False, focus=False)
+            if marker.is_target:
+                self.marker_visualizer.SetTarget(marker)
+                self.OnSetTarget(marker)
 
     def _initialize_navigation_ui(self):
         Publisher.sendMessage("Press target mode button", pressed=False)
