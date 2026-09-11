@@ -101,6 +101,9 @@ class VolumeView(wx.Panel):
     def __init__(self, parent, *, interactor=None):
         self._view_active = interactor is None
         self._disposed = False
+        self.navigation = None
+        self.active_view = self
+        self._navigation_mode = None
         self._timers = []
         self._cube_render_observer_tag = None
         self._ruler_observer_tag = None
@@ -121,6 +124,7 @@ class VolumeView(wx.Panel):
         self.style = None
 
         owns_interactor = interactor is None
+        self._owns_interactor = owns_interactor
         if owns_interactor:
             interactor = wxVTKRenderWindowInteractor(self, -1, size=self.GetSize())
         previous_renderers = tuple(interactor.GetRenderWindow().GetRenderers())
@@ -248,6 +252,7 @@ class VolumeView(wx.Panel):
             for renderer in self.renderers:
                 interactor.GetRenderWindow().RemoveRenderer(renderer)
         self._scene_renderers = list(self.renderers)
+        self.SetNavigationMode(ses.Session().GetConfig("mode") == const.MODE_NAVIGATOR)
 
     def _call_later(self, delay, callback, *args, **kwargs):
         if not self._disposed:
@@ -364,6 +369,9 @@ class VolumeView(wx.Panel):
     def dispose(self):
         if self._disposed:
             return
+        if self.navigation is not None:
+            self.navigation.dispose()
+            self.navigation = None
         if self._view_active:
             self.set_active(False)
         self._disposed = True
@@ -396,6 +404,11 @@ class VolumeView(wx.Panel):
             except Exception:
                 pass
             self._ruler_observer_tag = None
+        if self._owns_interactor:
+            try:
+                self.interactor.Disable()
+            except Exception:
+                pass
 
     def OnDestroy(self, evt):
         if evt.GetEventObject() is self:
@@ -448,6 +461,35 @@ class VolumeView(wx.Panel):
         Publisher.subscribe(self.OnEndSeed, "Create surface by seeding - end")
         Publisher.subscribe(self.load_mask_preview, "Load mask preview")
         Publisher.subscribe(self.remove_mask_preview, "Remove mask preview")
+        Publisher.subscribe(self.SetNavigationMode, "Set navigation mode")
+
+    def SetNavigationMode(self, status):
+        if self._disposed:
+            return
+        status = bool(status)
+        if status == self._navigation_mode:
+            return
+
+        if status:
+            from invesalius.data.viewer_navigation import NavigationController
+
+            self.navigation = NavigationController(self)
+            self.navigation.activate()
+            self.active_view = self.navigation
+        else:
+            if self.navigation is not None:
+                self.navigation.dispose()
+                self.navigation = None
+            self.active_view = self
+        self._navigation_mode = status
+
+        Publisher.sendMessage("Send orientation cube visibility status")
+        Publisher.sendMessage("Send ruler visibility status")
+        Publisher.sendMessage(
+            "Update viewer caption",
+            viewer_name="Volume",
+            caption=_("Navigation") if status else _("Volume"),
+        )
 
     def _update_fps_visibility(self):
         pass
@@ -747,6 +789,9 @@ class VolumeView(wx.Panel):
         self.UpdateRender()
 
     def OnCloseProject(self):
+        if self.navigation is not None and self.navigation.target_coord is not None:
+            self.navigation.OnUnsetTarget(None)
+
         # Disable the orientation cube widget cleanly to prevent visualization
         # artifacts across projects, but leave the object intact so the Python
         # GC can clean it up safely during application exit without segfaulting.

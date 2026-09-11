@@ -31,7 +31,7 @@ import invesalius.project as project
 import invesalius.session as ses
 from invesalius import inv_paths
 from invesalius.constants import ID_TO_BMP
-from invesalius.gui.volume_view_host import VolumeViewHost
+from invesalius.data.viewer_volume import VolumeView
 from invesalius.gui.widgets.clut_raycasting import (
     EVT_CLUT_CURVE_SELECT,
     EVT_CLUT_CURVE_WL_CHANGE,
@@ -232,8 +232,7 @@ class VolumeInteraction(wx.Panel):
         self.aui_manager = wx.aui.AuiManager()
         self.aui_manager.SetManagedWindow(self)
 
-        self.view_host = VolumeViewHost(self)
-        self.viewer = self.view_host.volume_view
+        self.viewer = VolumeView(self)
         s1 = (
             wx.aui.AuiPaneInfo().Centre().CloseButton(False).MaximizeButton(False).CaptionVisible(0)
         )
@@ -250,7 +249,7 @@ class VolumeInteraction(wx.Panel):
             .Hide()
         )
 
-        self.aui_manager.AddPane(self.view_host, s1)
+        self.aui_manager.AddPane(self.viewer, s1)
         self.aui_manager.AddPane(self.clut_raycasting, self.s2)
         self.aui_manager.Update()
 
@@ -328,7 +327,7 @@ class VolumeInteraction(wx.Panel):
 
         self._disposed = True
         Publisher.unsubscribe_owner(self)
-        self.view_host.dispose()
+        self.viewer.dispose()
         self.aui_manager.UnInit()
 
     def OnDestroy(self, evt):
