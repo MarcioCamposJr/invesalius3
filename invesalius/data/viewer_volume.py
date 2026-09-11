@@ -95,39 +95,33 @@ PROP_MEASURE = 0.8
 #  from invesalius.gui.widgets.canvas_renderer import CanvasRendererCTX, Polygon
 
 
-class VolumeView(wx.Panel):
+class Viewer(wx.Panel):
     """General 3D scene, rendering infrastructure and volume tools."""
 
-    def __init__(self, parent, *, interactor=None):
-        self._view_active = interactor is None
-        self._disposed = False
-        self.navigation = None
-        self.active_view = self
-        self._navigation_mode = None
-        self._timers = []
-        self._cube_render_observer_tag = None
-        self._ruler_observer_tag = None
-        self._scene_viewport = (0.0, 0.0, 1.0, 1.0)
+    def __init__(self, parent):
         display_size = wx.GetDisplaySize()
         # Set the initial volume wx.Panel size as half the screen resolution to fix the issue
         # with small target guide icons when loading a state file with target selected
         x = int(display_size[0] / 2)
         y = int(display_size[1] / 2)
         wx.Panel.__init__(self, parent, size=wx.Size(x, y))
+        self._disposed = False
+        self._call_laters = []
+        self._ruler_observer_tag = None
+        self._cube_render_observer_tag = None
+        self.navigation = None
+        self.active_view = self
+        self._navigation_mode = None
+        self._scene_viewport = (0.0, 0.0, 1.0, 1.0)
         self.SetBackgroundColour(wx.Colour(0, 0, 0))
 
         self.interaction_style = st.StyleStateManager()
 
         self.initial_focus = None
-        self.actor_factory = ActorFactory()
 
         self.style = None
 
-        owns_interactor = interactor is None
-        self._owns_interactor = owns_interactor
-        if owns_interactor:
-            interactor = wxVTKRenderWindowInteractor(self, -1, size=self.GetSize())
-        previous_renderers = tuple(interactor.GetRenderWindow().GetRenderers())
+        interactor = wxVTKRenderWindowInteractor(self, -1, size=self.GetSize())
         self.interactor = interactor
         self.interactor.SetRenderWhenDisabled(True)
 
@@ -137,8 +131,7 @@ class VolumeView(wx.Panel):
         self.enable_style(const.STATE_DEFAULT)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
-        if owns_interactor:
-            sizer.Add(interactor, 1, wx.EXPAND)
+        sizer.Add(interactor, 1, wx.EXPAND)
         self.sizer = sizer
         self.SetSizer(sizer)
         self.Layout()
@@ -227,6 +220,9 @@ class VolumeView(wx.Panel):
         self.surface = None
         self.surface_geometry = SurfaceGeometry()
 
+        # An object that can be used to create actors, such as lines, arrows, and spheres.
+        self.actor_factory = ActorFactory()
+
         # SSAO state tracking
         self.ssao_enabled = False
         self.ssao_pass = None
@@ -240,88 +236,20 @@ class VolumeView(wx.Panel):
         self.renderers = []
         for i in range(renwin.GetNumberOfItems()):
             renderer = renwin.GetNextItem()
-            if renderer not in previous_renderers:
-                self.renderers.append(renderer)
+            self.renderers.append(renderer)
 
-        self._update_fps_visibility()
         # Request the orientation cube visibility status with a small delay
         # to ensure the interactor has time to initialize during app startup.
         self._call_later(1000, Publisher.sendMessage, "Send orientation cube visibility status")
-        if not owns_interactor:
-            self.canvas.set_mouse_events_enabled(False)
-            for renderer in self.renderers:
-                interactor.GetRenderWindow().RemoveRenderer(renderer)
-        self._scene_renderers = list(self.renderers)
         self.SetNavigationMode(ses.Session().GetConfig("mode") == const.MODE_NAVIGATOR)
 
-    def _call_later(self, delay, callback, *args, **kwargs):
-        if not self._disposed:
-            running_timers = []
-            for timer in self._timers:
-                try:
-                    if timer.IsRunning():
-                        running_timers.append(timer)
-                except RuntimeError:
-                    pass
-            self._timers = running_timers
-            timer = wx.CallLater(delay, callback, *args, **kwargs)
-            self._timers.append(timer)
-            return timer
+    def _call_later(self, delay, callable_, *args, **kwargs):
+        if self._disposed:
+            return None
 
-    def set_active(self, active):
-        """Attach or detach this scene from its shared interactor."""
-        if self._disposed or self._view_active == active:
-            return
-        window = self.interactor.GetRenderWindow()
-        if not active:
-            self._view_active = False
-            if self.orientation_widget is not None:
-                self.orientation_widget.SetEnabled(0)
-            if self.slice_plane:
-                self._plane_visibility = [plane.GetEnabled() for plane in self._slice_widgets()]
-                for plane in self._slice_widgets():
-                    plane.SetEnabled(0)
-            if self.style is not None:
-                cleanup = getattr(self.style, "CleanUp", None)
-                if cleanup:
-                    cleanup()
-                Publisher.unsubscribe_owner(self.style)
-                self.style = None
-            self.interactor.SetInteractorStyle(None)
-            self.canvas.set_mouse_events_enabled(False)
-            for renderer in self._scene_renderers:
-                window.RemoveRenderer(renderer)
-        else:
-            for renderer in self._scene_renderers:
-                window.AddRenderer(renderer)
-            self._view_active = True
-            self.canvas.set_mouse_events_enabled(True)
-            self.interactor.SetPicker(self.picker)
-            self.SetInteractorStyle(self.interaction_style.GetActualState())
-            if self.slice_plane:
-                for plane, visible in zip(
-                    self._slice_widgets(), getattr(self, "_plane_visibility", (0, 0, 0))
-                ):
-                    plane.SetEnabled(visible)
-                self.slice_plane.UpdateAllSlice()
-            if getattr(self, "_cube_request_on", False):
-                self.OnShowOrientationCube(True)
-            self._ApplySSAOAfterProjectLoad()
-            self.UpdateRender()
-
-    def _slice_widgets(self):
-        return (self.slice_plane.plane_x, self.slice_plane.plane_y, self.slice_plane.plane_z)
-
-    def _remove_scene_renderer(self, renderer):
-        self.interactor.GetRenderWindow().RemoveRenderer(renderer)
-        if renderer in self._scene_renderers:
-            self._scene_renderers.remove(renderer)
-
-    def _add_scene_renderer(self, renderer):
-        if renderer not in self._scene_renderers:
-            self._scene_renderers.append(renderer)
-        if self._view_active:
-            self.interactor.GetRenderWindow().AddRenderer(renderer)
+        timer = wx.CallLater(delay, callable_, *args, **kwargs)
+        self._call_laters.append(timer)
+        return timer
 
     def _map_scene_viewport(self, viewport):
         scene_x_min, scene_y_min, scene_x_max, scene_y_max = self._scene_viewport
@@ -372,18 +300,15 @@ class VolumeView(wx.Panel):
         if self.navigation is not None:
             self.navigation.dispose()
             self.navigation = None
-        if self._view_active:
-            self.set_active(False)
         self._disposed = True
         Publisher.unsubscribe_owner(self)
-        for timer in self._timers:
+        for timer in self._call_laters:
             try:
                 if timer.IsRunning():
                     timer.Stop()
             except RuntimeError:
                 pass
-        self._timers.clear()
-        self.canvas.set_mouse_events_enabled(False)
+        self._call_laters.clear()
         if self.slice_plane:
             self.slice_plane.dispose()
             self.slice_plane = None
@@ -404,11 +329,10 @@ class VolumeView(wx.Panel):
             except Exception:
                 pass
             self._ruler_observer_tag = None
-        if self._owns_interactor:
-            try:
-                self.interactor.Disable()
-            except Exception:
-                pass
+        try:
+            self.interactor.Disable()
+        except Exception:
+            pass
 
     def OnDestroy(self, evt):
         if evt.GetEventObject() is self:
@@ -491,9 +415,6 @@ class VolumeView(wx.Panel):
             caption=_("Navigation") if status else _("Volume"),
         )
 
-    def _update_fps_visibility(self):
-        pass
-
     def UpdateCanvas(self):
         if self.canvas is not None:
             self.canvas.modified = True
@@ -571,7 +492,7 @@ class VolumeView(wx.Panel):
         """
         Build and enable the 3D orientation cube (anatomical directions).
         """
-        if self._disposed or not self._view_active or not getattr(self, "_cube_request_on", False):
+        if self._disposed or not getattr(self, "_cube_request_on", False):
             return
 
         if not self.interactor:
@@ -708,7 +629,7 @@ class VolumeView(wx.Panel):
         cube.SetZFaceTextRotation(rotation)
 
     def OnInteractorEvent(self, sender, event):
-        if not self._view_active or self._disposed:
+        if self._disposed:
             return
         if self.canvas and self.ruler and self.ruler in self.canvas.draw_list:
             view_port_height = round(self.ren.GetActiveCamera().GetParallelScale(), 4)
@@ -816,13 +737,11 @@ class VolumeView(wx.Panel):
 
     def OnHideText(self):
         self.text.Hide()
-        self._update_fps_visibility()
         self.UpdateRender()
 
     def OnShowText(self):
         if self.on_wl:
             self.text.Show()
-        self._update_fps_visibility()
         self.UpdateRender()
 
     def AddActors(self, actors):
@@ -986,9 +905,6 @@ class VolumeView(wx.Panel):
         imsave("/tmp/polygon.png", arr)
 
     def SetInteractorStyle(self, state):
-        if not self._view_active:
-            self.state = state
-            return
         # Check if we're entering or exiting a measurement state
         measurement_states = {
             const.STATE_MEASURE_DISTANCE,
@@ -1030,7 +946,6 @@ class VolumeView(wx.Panel):
         self.UpdateRender()
 
         self.state = state
-        self._update_fps_visibility()
 
         # Re-enable SSAO when exiting measurement mode (if it was enabled before)
         if exiting_measurement and self.ssao_before_measurement:
@@ -1102,7 +1017,7 @@ class VolumeView(wx.Panel):
             wx.CallAfter(self._DeferredRepositionCamera)
 
     def _DeferredRepositionCamera(self):
-        if self._disposed or not self._view_active:
+        if self._disposed:
             return
         """Reposition camera after window resize is complete"""
         try:
@@ -1182,11 +1097,7 @@ class VolumeView(wx.Panel):
     def LoadSlicePlane(self):
         if self.slice_plane:
             self.slice_plane.dispose()
-        self._plane_visibility = (0, 0, 0)
-        self.slice_plane = SlicePlane(interactor=self.interactor)
-        for plane in self._slice_widgets():
-            plane.SetDefaultRenderer(self.ren)
-            plane.SetCurrentRenderer(self.ren)
+        self.slice_plane = SlicePlane()
 
     def LoadVolume(self, volume, colour, ww, wl):
         self.raycasting_volume = True
@@ -1526,7 +1437,7 @@ class VolumeView(wx.Panel):
             self.UpdateRender()
 
     def UpdateRender(self):
-        if self._disposed or not self._view_active:
+        if self._disposed:
             return
         self._UpdateOrientationCubeZTextRotation()
         self.interactor.Render()
@@ -1538,7 +1449,7 @@ class VolumeView(wx.Panel):
         self.ren.AddActor(actor)
 
     def _EnableSSAO(self):
-        if self._disposed or not self._view_active:
+        if self._disposed:
             return
         if self.ssao_enabled:
             return
@@ -1632,9 +1543,9 @@ class VolumeView(wx.Panel):
             self._call_later(500, self._RetryEnableSSAO)  # Retry after 500ms
 
     def _RetryEnableSSAO(self):
-        if self._disposed or not self._view_active:
-            return
         """Retry enabling SSAO after a delay to ensure render window is ready"""
+        if self._disposed:
+            return
         render_window = self.interactor.GetRenderWindow()
         if render_window:
             if not render_window.GetNeverRendered():
@@ -1744,13 +1655,9 @@ class VolumeView(wx.Panel):
             return
 
         renwin = self.interactor.GetRenderWindow()
-        for r in self.renderers:
-            renwin.RemoveRenderer(r)
-
-        renwin.SetNumberOfLayers(2)
-        renwin.AddRenderer(self.renderers[1])
-        renwin.AddRenderer(self.renderers[2])
-        renwin.AddRenderer(self.renderers[3])
+        self._target_guide_was_attached = renwin.HasRenderer(self.target_guide_renderer)
+        if self._target_guide_was_attached:
+            renwin.RemoveRenderer(self.target_guide_renderer)
 
         self.interactor.Render()
 
@@ -1759,19 +1666,20 @@ class VolumeView(wx.Panel):
         Restores renderer order after export, keeping self.target_guide_renderer,
         ren and canvas_renderer
         """
-        if self.target_guide_renderer is None:
+        if self.target_guide_renderer is None or not getattr(
+            self, "_target_guide_was_attached", False
+        ):
             return
 
         renwin = self.interactor.GetRenderWindow()
-        renwin.RemoveRenderer(self.renderers[1])
-        renwin.RemoveRenderer(self.renderers[2])
-
-        renwin.AddRenderer(self.renderers[0])
+        for renderer in self.renderers:
+            renwin.RemoveRenderer(renderer)
+        renwin.AddRenderer(self.target_guide_renderer)
         renwin.SetNumberOfLayers(2)
-        renwin.AddRenderer(self.renderers[1])
-        renwin.AddRenderer(self.renderers[2])
-        renwin.AddRenderer(self.renderers[3])
+        for renderer in self.renderers:
+            renwin.AddRenderer(renderer)
 
+        self._target_guide_was_attached = False
         self.interactor.Render()
 
     def _export_surface(self, filename, filetype):
@@ -1881,9 +1789,8 @@ class VolumeView(wx.Panel):
 
 
 class SlicePlane:
-    def __init__(self, *, interactor=None):
+    def __init__(self):
         self._disposed = False
-        self.interactor = interactor
         project = prj.Project()
         self.original_orientation = project.original_orientation
         self.Create()
@@ -1902,13 +1809,9 @@ class SlicePlane:
 
         self._disposed = True
         Publisher.unsubscribe_owner(self)
-        for plane in self._slice_widgets():
+        for plane in (self.plane_x, self.plane_y, self.plane_z):
             plane.Off()
-            plane.SetInteractor(None)
         self.DeletePlanes()
-
-    def _slice_widgets(self):
-        return (self.plane_x, self.plane_y, self.plane_z)
 
     def Create(self):
         plane_x = self.plane_x = vtkImagePlaneWidget()
@@ -1967,18 +1870,9 @@ class SlicePlane:
         selected_prop2 = plane_y.GetSelectedPlaneProperty()
         selected_prop2.SetColor(0, 1, 0)
 
-        if self.interactor is not None:
-            plane_x.SetInteractor(self.interactor._Iren)
-        else:
-            Publisher.sendMessage("Set Widget Interactor", widget=plane_x)
-        if self.interactor is not None:
-            plane_y.SetInteractor(self.interactor._Iren)
-        else:
-            Publisher.sendMessage("Set Widget Interactor", widget=plane_y)
-        if self.interactor is not None:
-            plane_z.SetInteractor(self.interactor._Iren)
-        else:
-            Publisher.sendMessage("Set Widget Interactor", widget=plane_z)
+        Publisher.sendMessage("Set Widget Interactor", widget=plane_x)
+        Publisher.sendMessage("Set Widget Interactor", widget=plane_y)
+        Publisher.sendMessage("Set Widget Interactor", widget=plane_z)
 
         Publisher.sendMessage("Render volume viewer")
 

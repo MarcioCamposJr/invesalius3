@@ -135,7 +135,7 @@ class NavigationRenderer:
 
 
 class NavigationController:
-    """Add navigation behavior to an existing :class:`VolumeView`."""
+    """Add navigation behavior to an existing volume viewer."""
 
     def __init__(self, view):
         self.view = view
