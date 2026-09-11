@@ -190,9 +190,9 @@ class NavigationController:
         self.view.nav_status = self.nav_status
         self.view.target_mode = self.target_mode
         self.ren.set_active(True)
-        window = self.interactor.GetRenderWindow()
         for renderer in self._navigation_renderers:
-            window.AddRenderer(renderer)
+            if renderer is not self.target_guide_renderer or self.target_mode:
+                self._attach_renderer(renderer)
         self._apply_scene_viewport()
         self._update_fps_visibility()
         self.view.UpdateRender()
@@ -207,9 +207,8 @@ class NavigationController:
         self.view.target_mode = False
         self._update_fps_visibility()
         self.ren.set_active(False)
-        window = self.interactor.GetRenderWindow()
         for renderer in self._navigation_renderers:
-            window.RemoveRenderer(renderer)
+            self._detach_renderer(renderer)
         self.view.restore_state(self._volume_state)
         self._volume_state = None
         self.view.SetSceneViewport((0.0, 0.0, 1.0, 1.0))
@@ -225,13 +224,23 @@ class NavigationController:
     def _add_scene_renderer(self, renderer):
         if renderer not in self._navigation_renderers:
             self._navigation_renderers.append(renderer)
-        if self._active:
-            self.interactor.GetRenderWindow().AddRenderer(renderer)
+        if self._active and (renderer is not self.target_guide_renderer or self.target_mode):
+            self._attach_renderer(renderer)
 
     def _remove_scene_renderer(self, renderer):
-        self.interactor.GetRenderWindow().RemoveRenderer(renderer)
+        self._detach_renderer(renderer)
         if renderer in self._navigation_renderers:
             self._navigation_renderers.remove(renderer)
+
+    def _attach_renderer(self, renderer):
+        window = self.interactor.GetRenderWindow()
+        if not window.HasRenderer(renderer):
+            window.AddRenderer(renderer)
+
+    def _detach_renderer(self, renderer):
+        window = self.interactor.GetRenderWindow()
+        if window.HasRenderer(renderer):
+            window.RemoveRenderer(renderer)
 
     def _initialize_navigation_data(self):
         self.static_markers_efield = []
@@ -760,6 +769,8 @@ class NavigationController:
             self.target_guide_renderer.AddActor(ind)
 
     def EnableTargetMode(self):
+        self._attach_renderer(self.target_guide_renderer)
+
         # Store the current camera settings so that they can be restored when the target mode is disabled.
         self.stored_camera_settings = self.GetCameraSettings()
 
@@ -832,6 +843,7 @@ class NavigationController:
 
         # Reset the main renderer to this navigation scene's full viewport.
         self._apply_scene_viewport()
+        self._detach_renderer(self.target_guide_renderer)
 
         # Remove the actor for 'distance' text.
         if self.distance_text is not None:
