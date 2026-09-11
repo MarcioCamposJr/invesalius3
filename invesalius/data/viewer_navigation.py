@@ -219,6 +219,11 @@ class NavigationController:
             return
         self.deactivate()
         self._disposed = True
+        self.marker_visualizer.dispose()
+        self.coil_visualizer.dispose()
+        self.probe_visualizer.dispose()
+        self.robot_force_visualizer.dispose()
+        self.vector_field_visualizer.dispose()
         self.ren.RemoveActor(self.fps_text.actor)
 
     def _add_scene_renderer(self, renderer):

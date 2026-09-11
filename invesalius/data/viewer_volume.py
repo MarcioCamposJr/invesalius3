@@ -103,6 +103,7 @@ class VolumeView(wx.Panel):
         self._view_active = interactor is None
         self._disposed = False
         self._timers = []
+        self._cube_render_observer_tag = None
         self._ruler_observer_tag = None
         self._scene_viewport = (0.0, 0.0, 1.0, 1.0)
         display_size = wx.GetDisplaySize()
@@ -249,10 +250,17 @@ class VolumeView(wx.Panel):
                 interactor.GetRenderWindow().RemoveRenderer(renderer)
         self._scene_renderers = list(self.renderers)
 
-    def _call_later(self, delay, callback, *args):
+    def _call_later(self, delay, callback, *args, **kwargs):
         if not self._disposed:
-            self._timers = [timer for timer in self._timers if timer.IsRunning()]
-            timer = wx.CallLater(delay, callback, *args)
+            running_timers = []
+            for timer in self._timers:
+                try:
+                    if timer.IsRunning():
+                        running_timers.append(timer)
+                except RuntimeError:
+                    pass
+            self._timers = running_timers
+            timer = wx.CallLater(delay, callback, *args, **kwargs)
             self._timers.append(timer)
             return timer
 
@@ -361,19 +369,44 @@ class VolumeView(wx.Panel):
         if self._view_active:
             self.set_active(False)
         self._disposed = True
+        Publisher.unsubscribe_owner(self)
         for timer in self._timers:
-            if timer.IsRunning():
-                timer.Stop()
+            try:
+                if timer.IsRunning():
+                    timer.Stop()
+            except RuntimeError:
+                pass
         self._timers.clear()
         self.canvas.set_mouse_events_enabled(False)
-        if self._ruler_observer_tag is not None:
-            self.interactor.RemoveObserver(self._ruler_observer_tag)
         if self.slice_plane:
-            for plane in self._slice_widgets():
-                plane.SetEnabled(0)
-                plane.SetInteractor(None)
+            if self._event_router is not None:
+                self._event_router.unsubscribe_owner(self.slice_plane)
+            self.slice_plane.dispose()
+            self.slice_plane = None
+        if self.orientation_widget is not None:
+            try:
+                self.orientation_widget.SetEnabled(0)
+            except Exception:
+                pass
+        if self._cube_render_observer_tag is not None:
+            try:
+                self.ren.RemoveObserver(self._cube_render_observer_tag)
+            except Exception:
+                pass
+            self._cube_render_observer_tag = None
+        if self._ruler_observer_tag is not None:
+            try:
+                self.interactor.RemoveObserver(self._ruler_observer_tag)
+            except Exception:
+                pass
+            self._ruler_observer_tag = None
         if self._event_router is not None:
             self._event_router.dispose()
+
+    def OnDestroy(self, evt):
+        if evt.GetEventObject() is self:
+            self.dispose()
+        evt.Skip()
 
     def _bind_events(self):
         Publisher.subscribe(self.AddSurface, "Load surface actor into viewer")
@@ -735,13 +768,11 @@ class VolumeView(wx.Panel):
         if self.slice_plane:
             if self._event_router is not None:
                 self._event_router.unsubscribe_owner(self.slice_plane)
-            self.slice_plane.Disable()
-            self.slice_plane.DeletePlanes()
-            del self.slice_plane
+            self.slice_plane.dispose()
             Publisher.sendMessage("Uncheck image plane menu")
             self.mouse_pressed = 0
             self.on_wl = False
-            self.slice_plane = 0
+            self.slice_plane = None
 
         self.interaction_style.Reset()
         self.SetInteractorStyle(const.STATE_DEFAULT)
@@ -903,7 +934,7 @@ class VolumeView(wx.Panel):
     def __bind_events_wx(self):
         # self.Bind(wx.EVT_SIZE, self.OnSize)
         #  self.canvas.subscribe_event('LeftButtonPressEvent', self.on_insert_point)
-        pass
+        self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
 
     def on_insert_point(self, evt):
         pos = evt.position
@@ -1117,9 +1148,7 @@ class VolumeView(wx.Panel):
         if self.slice_plane:
             if self._event_router is not None:
                 self._event_router.unsubscribe_owner(self.slice_plane)
-            for plane in self._slice_widgets():
-                plane.SetEnabled(0)
-                plane.SetInteractor(None)
+            self.slice_plane.dispose()
         self._plane_visibility = (0, 0, 0)
         self.slice_plane = SlicePlane(interactor=self.interactor)
         if self._event_router is not None:
@@ -1822,6 +1851,7 @@ class VolumeView(wx.Panel):
 
 class SlicePlane:
     def __init__(self, *, interactor=None):
+        self._disposed = False
         self.interactor = interactor
         project = prj.Project()
         self.original_orientation = project.original_orientation
@@ -1834,6 +1864,20 @@ class SlicePlane:
         Publisher.subscribe(self.Disable, "Disable plane")
         Publisher.subscribe(self.ChangeSlice, "Change slice from slice plane")
         Publisher.subscribe(self.UpdateAllSlice, "Update all slice")
+
+    def dispose(self):
+        if self._disposed:
+            return
+
+        self._disposed = True
+        Publisher.unsubscribe_owner(self)
+        for plane in self._slice_widgets():
+            plane.Off()
+            plane.SetInteractor(None)
+        self.DeletePlanes()
+
+    def _slice_widgets(self):
+        return (self.plane_x, self.plane_y, self.plane_z)
 
     def Create(self):
         plane_x = self.plane_x = vtkImagePlaneWidget()
@@ -1971,6 +2015,6 @@ class SlicePlane:
         Publisher.sendMessage("Update slice 3D", widget=self.plane_z, orientation="AXIAL")
 
     def DeletePlanes(self):
-        del self.plane_x
-        del self.plane_y
-        del self.plane_z
+        self.plane_x = None
+        self.plane_y = None
+        self.plane_z = None

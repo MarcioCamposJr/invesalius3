@@ -111,3 +111,7 @@ class VolumeViewHost(wx.Panel):
         self.navigation_events.dispose()
         self.navigation.dispose()
         self.volume_view.dispose()
+        try:
+            self.interactor.Disable()
+        except Exception:
+            pass
