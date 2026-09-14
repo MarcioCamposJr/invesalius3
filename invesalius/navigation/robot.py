@@ -257,7 +257,29 @@ class Robot:
             coil_idx=coil_idx,
             robot_id=self.robot_id,
         )
+        self.SendCollisionRegistrations()
         self.SaveConfig("robot_coil", name)
+
+    def SendCollisionRegistrations(self):
+        registrations = self.navigation.coil_registrations
+        if self.coil_name not in registrations or len(registrations) != 2:
+            return False
+
+        collision_registrations = {
+            coil_name: {
+                "obj_id": registration["obj_id"],
+                "fiducials": registration["fiducials"],
+                "orientations": registration["orientations"],
+            }
+            for coil_name, registration in registrations.items()
+        }
+        Publisher.sendMessage(
+            "Neuronavigation to Robot: Set coil collision registrations",
+            registrations=collision_registrations,
+            coil_idx=registrations[self.coil_name]["obj_id"],
+            robot_id=self.robot_id,
+        )
+        return True
 
     def SendTargetToRobot(self):
         if not self.IsReady():
@@ -518,3 +540,9 @@ class Robots(metaclass=Singleton):
     def SendTargetToAll(self):
         for robot in self.robots_by_id.values():
             robot.SendTargetToRobot()
+
+    def SendCollisionRegistrationsToAll(self):
+        sent = False
+        for robot in self.robots_by_id.values():
+            sent = robot.SendCollisionRegistrations() or sent
+        return sent

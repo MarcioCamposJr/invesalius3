@@ -757,6 +757,12 @@ class Navigation(metaclass=Singleton):
                 )
             )
 
+            if self.n_coils > 1 and not Robots().SendCollisionRegistrationsToAll():
+                print(
+                    "Coil collision registrations were not sent. "
+                    "Check robot-to-coil assignments and coil registrations."
+                )
+
             for jobs in jobs_list:
                 # jobs.daemon = True
                 jobs.start()
