@@ -19,7 +19,6 @@
 
 import queue
 import threading
-from time import sleep
 
 import numpy as np
 
@@ -410,13 +409,8 @@ class CoordinateCorregistrate(threading.Thread):
                 if not self.object_at_target_queue.empty():
                     self.target_flag = self.object_at_target_queue.get_nowait()
 
-                can_push_coord = not self.coord_queue.full()
                 can_push_tracts = self.view_tracts and not self.coord_tracts_queue.full()
                 can_push_efield = self.e_field_loaded and not self.efield_queue.full()
-                if not (can_push_coord or can_push_tracts or can_push_efield):
-                    sleep(self._loop_sleep)
-                    continue
-
                 coord_raw, marker_visibilities = self.tracker.TrackerCoordinates.GetCoordinates()
                 coord_probe, m_img_probe = self._corregistrate_probe(
                     m_change,
@@ -466,8 +460,7 @@ class CoordinateCorregistrate(threading.Thread):
                     m_imgs[main_coil] = tr.compose_matrix(angles=angles, translate=translate)
                     m_img = m_imgs[main_coil]
 
-                if can_push_coord:
-                    self.coord_queue.put_nowait([coords, marker_visibilities, m_imgs])
+                self.coord_queue.put_latest([coords, marker_visibilities, m_imgs])
 
                 # Compute data for efield/tracts
                 if can_push_tracts:
@@ -482,7 +475,7 @@ class CoordinateCorregistrate(threading.Thread):
                 pass
 
             # The sleep has to be in both threads
-            sleep(self._loop_sleep)
+            self.event.wait(self._loop_sleep)
 
     def _corregistrate_probe(
         self, m_change, r_stylus_eff, coord_raw, ref_mode_id, icp, probe_rot, probe_rot_inv

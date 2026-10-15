@@ -17,10 +17,10 @@
 #    detalhes.
 # --------------------------------------------------------------------------
 
+import logging
 import queue
 import threading
 import time
-from time import sleep
 
 import numpy as np
 import wx
@@ -49,6 +49,8 @@ from invesalius.net.neuronavigation_api import NeuronavigationApi
 from invesalius.net.pedal_connection import PedalConnector
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import Singleton
+
+NAVIGATION_STOP_TIMEOUT_SECONDS = 2.0
 
 
 class NavigationHub(metaclass=Singleton):
@@ -90,10 +92,8 @@ class QueueCustom(queue.Queue):
     """
     A custom queue subclass that provides a :meth:`clear` method.
     https://stackoverflow.com/questions/6517953/clear-all-items-from-the-queue
-    Modified to a LIFO Queue type (Last-in-first-out). Seems to make sense for the navigation
-    threads, as the last added coordinate should be the first to be processed.
-    In the first tests in a short run, seems to increase the coord queue size considerably,
-    possibly limiting the queue size is good.
+    Pose producers can replace waiting entries with ``put_latest`` without
+    changing the task accounting of an item already being processed.
     """
 
     def clear(self):
@@ -110,6 +110,15 @@ class QueueCustom(queue.Queue):
             self.unfinished_tasks = unfinished
             self.queue.clear()
             self.not_full.notify_all()
+
+    def put_latest(self, item):
+        with self.not_full:
+            while self._qsize():
+                self._get()
+                self.unfinished_tasks -= 1
+            self._put(item)
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
 
 
 class UpdateNavigationScene(threading.Thread):
@@ -149,11 +158,10 @@ class UpdateNavigationScene(threading.Thread):
         self.event = event
         self.neuronavigation_api = neuronavigation_api
         self.navigation = Navigation()
-        self._last_render = 0.0
-        self._render_interval = max(self.sle, 1.0 / 100.0)
         self._slice_render_interval = max(self.sle, 1.0 / 10.0)
-        self._loop_sleep = max(self.sle, 1.0 / 120.0)
-        self._last_pose_update = 0.0
+        self._dispatch_lock = threading.Lock()
+        self._pending_update = None
+        self._dispatch_timer = None
         self._last_dispatch = 0.0
         self._dispatch_pending = False
         self._last_slice_render = 0.0
@@ -162,7 +170,6 @@ class UpdateNavigationScene(threading.Thread):
         self,
         *,
         update_pose,
-        render,
         slice_render,
         coord,
         probe_visible,
@@ -176,137 +183,187 @@ class UpdateNavigationScene(threading.Thread):
         trigger_on,
         enorm_data,
     ):
-        try:
-            if tracts_payload is not None:
-                bundle, affine_vtk, coord_offset, coord_offset_w = tracts_payload
-                Publisher.sendMessage("Remove tracts", coil_name=main_coil)
+        if self.event.is_set():
+            return
+        if tracts_payload is not None:
+            bundle, affine_vtk, coord_offset, coord_offset_w = tracts_payload
+            Publisher.sendMessage("Remove tracts", coil_name=main_coil)
+            Publisher.sendMessage(
+                "Update tracts",
+                coil_name=main_coil,
+                root=bundle,
+                affine_vtk=affine_vtk,
+                coord_offset=coord_offset,
+                coord_offset_w=coord_offset_w,
+            )
+
+        if update_pose:
+            Publisher.sendMessage("Update slices position", position=coord[:3])
+            Publisher.sendMessage("Set cross focal point", position=coord)
+            Publisher.sendMessage(
+                "Update volume viewer pointer",
+                position=[coord[0], -coord[1], coord[2]],
+            )
+
+            if coil_visible:
+                Publisher.sendMessage("Update coil poses", m_imgs=m_imgs, coords=coords)
                 Publisher.sendMessage(
-                    "Update tracts",
+                    "Update coil pose",
+                    m_img=m_imgs[main_coil],
+                    coord=coords[main_coil],
+                )
+                Publisher.sendMessage(
+                    "From Neuronavigation: Send coil pose",
+                    coord=list(coords[main_coil]),
+                )
+                Publisher.sendMessage(
+                    "Update object arrow matrix",
                     coil_name=main_coil,
-                    root=bundle,
-                    affine_vtk=affine_vtk,
-                    coord_offset=coord_offset,
-                    coord_offset_w=coord_offset_w,
+                    m_img=m_imgs[main_coil],
+                    coord=coords[main_coil],
+                    flag=self.peel_loaded,
                 )
 
-            if trigger_on:
-                Publisher.sendMessage("Create marker", marker_type=MarkerType.COIL_POSE)
-
-            if update_pose:
-                Publisher.sendMessage("Update slices position", position=coord[:3])
-                Publisher.sendMessage("Set cross focal point", position=coord)
+                if self.e_field_loaded:
+                    Publisher.sendMessage(
+                        "Update point location for e-field calculation",
+                        m_img=m_imgs[main_coil],
+                        coord=coords[main_coil],
+                        queue_IDs=self.e_field_IDs_queue,
+                    )
+            if probe_visible:
                 Publisher.sendMessage(
-                    "Update volume viewer pointer",
-                    position=[coord[0], -coord[1], coord[2]],
+                    "Update probe pose",
+                    m_img=probe_m_img,
+                    coord=probe_coord,
                 )
 
-                if coil_visible:
-                    Publisher.sendMessage("Update coil poses", m_imgs=m_imgs, coords=coords)
-                    Publisher.sendMessage(
-                        "Update coil pose",
-                        m_img=m_imgs[main_coil],
-                        coord=coords[main_coil],
-                    )
-                    Publisher.sendMessage(
-                        "From Neuronavigation: Send coil pose",
-                        coord=list(coords[main_coil]),
-                    )
-                    Publisher.sendMessage(
-                        "Update object arrow matrix",
-                        coil_name=main_coil,
-                        m_img=m_imgs[main_coil],
-                        coord=coords[main_coil],
-                        flag=self.peel_loaded,
-                    )
+        for _trigger in range(trigger_on):
+            Publisher.sendMessage("Create marker", marker_type=MarkerType.COIL_POSE)
 
-                    if self.e_field_loaded:
-                        Publisher.sendMessage(
-                            "Update point location for e-field calculation",
-                            m_img=m_imgs[main_coil],
-                            coord=coords[main_coil],
-                            queue_IDs=self.e_field_IDs_queue,
-                        )
-                        if enorm_data is not None:
-                            Publisher.sendMessage(
-                                "Get enorm",
-                                enorm_data=enorm_data,
-                                plot_vector=self.plot_efield_vectors,
-                                current_revision=self.navigation.e_field_revision,
-                            )
+        if coil_visible and self.e_field_loaded:
+            if enorm_data is not None:
+                Publisher.sendMessage(
+                    "Get enorm",
+                    enorm_data=enorm_data,
+                    plot_vector=self.plot_efield_vectors,
+                    current_revision=self.navigation.e_field_revision,
+                )
+            if self.view_tracts:
+                Publisher.sendMessage(
+                    "Update tract seed based efield",
+                    coord_tracts_queue=self.navigation.coord_tracts_queue,
+                    fallback_m_img=m_imgs[main_coil],
+                    current_revision=self.navigation.e_field_revision,
+                )
 
-                if probe_visible:
-                    Publisher.sendMessage(
-                        "Update probe pose",
-                        m_img=probe_m_img,
-                        coord=probe_coord,
-                    )
+        Publisher.sendMessage("Render volume viewer")
+        if slice_render:
+            Publisher.sendMessage("Update slice viewer")
 
-            if render:
-                Publisher.sendMessage("Render volume viewer")
-                if slice_render:
-                    Publisher.sendMessage("Update slice viewer")
+    def _queue_update(self, update):
+        with self._dispatch_lock:
+            if self.event.is_set():
+                return
+            previous = self._pending_update
+            if previous is not None:
+                update["update_pose"] |= previous["update_pose"]
+                update["trigger_on"] += previous["trigger_on"]
+                if previous["main_coil"] == update["main_coil"]:
+                    for key in ("tracts_payload", "enorm_data"):
+                        if update[key] is None:
+                            update[key] = previous[key]
+            self._pending_update = update
+            schedule = not self._dispatch_pending
+            self._dispatch_pending = True
+        if schedule:
+            wx.CallAfter(self._flush_updates)
+
+    def _flush_updates(self):
+        self._dispatch_timer = None
+        if self.event.is_set():
+            self.CancelDispatch()
+            return
+        interval = max(self.sle, 1.0 / 100.0)
+        delay = interval - (time.perf_counter() - self._last_dispatch)
+        if delay > 0:
+            self._dispatch_timer = wx.CallLater(max(1, int(delay * 1000) + 1), self._flush_updates)
+            return
+        with self._dispatch_lock:
+            update = self._pending_update
+            self._pending_update = None
+        try:
+            if update is not None:
+                now = time.perf_counter()
+                self._last_dispatch = now
+                update["slice_render"] = (
+                    now - self._last_slice_render >= self._slice_render_interval
+                )
+                if update["slice_render"]:
+                    self._last_slice_render = now
+                self._dispatch_updates(**update)
         finally:
+            with self._dispatch_lock:
+                schedule = self._pending_update is not None and not self.event.is_set()
+                self._dispatch_pending = schedule
+            if schedule:
+                wx.CallAfter(self._flush_updates)
+
+    def CancelDispatch(self):
+        if self._dispatch_timer is not None:
+            self._dispatch_timer.Stop()
+            self._dispatch_timer = None
+        with self._dispatch_lock:
+            self._pending_update = None
             self._dispatch_pending = False
 
     def run(self):
+        latest = None
         while not self.event.is_set():
+            new_pose = False
             try:
-                coords, marker_visibilities, m_imgs = self.coord_queue.get_nowait()
+                latest = self.coord_queue.get(timeout=0.05)
             except queue.Empty:
-                sleep(self._loop_sleep)
-                continue
-
-            probe_visible = marker_visibilities[0]
-            coil_visible = any(marker_visibilities[2:])  # is any coil visible?
-
-            main_coil = self.navigation.main_coil
-            track_this = main_coil if self.navigation.track_coil else "probe"
-            # choose which object to track in slices and viewer_volume pointer
-            coord = coords.get(track_this, None)
-            if coord is None:
+                pass
+            else:
                 self.coord_queue.task_done()
+                new_pose = True
+            if self.event.is_set() or latest is None:
                 continue
 
-            # Remove probe, so that coords/m_imgs only contain coils
-            probe_coord = coords.pop("probe")
-            probe_m_img = m_imgs.pop("probe")
+            coords, marker_visibilities, m_imgs = latest
+            main_coil = self.navigation.main_coil
+            coil_visible = (
+                any(marker_visibilities[2:]) and main_coil in coords and main_coil in m_imgs
+            )
+            track_this = main_coil if self.navigation.track_coil else "probe"
+            coord = coords.get(track_this)
+            if coord is None:
+                continue
+            probe_coord, probe_m_img = coords["probe"], m_imgs["probe"]
+            coords = {name: pose for name, pose in coords.items() if name != "probe"}
+            m_imgs = {name: matrix for name, matrix in m_imgs.items() if name != "probe"}
 
-            # use of CallAfter is mandatory otherwise crashes the wx interface
             tracts_payload = None
             if self.view_tracts:
                 try:
-                    if self.e_field_loaded:
-                        wx.CallAfter(
-                            Publisher.sendMessage,
-                            "Update tract seed based efield",
-                            coord_tracts_queue=self.navigation.coord_tracts_queue,
-                            fallback_m_img=m_imgs[main_coil],
-                            current_revision=self.navigation.e_field_revision,
-                        )
-                    bundle, affine_vtk, coord_offset, coord_offset_w = (
-                        self.tracts_queue.get_nowait()
-                    )
+                    tracts_payload = self.tracts_queue.get_nowait()
                 except queue.Empty:
                     pass
                 else:
-                    tracts_payload = (bundle, affine_vtk, coord_offset, coord_offset_w)
                     self.tracts_queue.task_done()
 
-            trigger_on = False
+            trigger_on = 0
             if self.serial_port_enabled:
                 try:
-                    trigger_on = self.serial_port_queue.get_nowait()
+                    trigger_on = int(bool(self.serial_port_queue.get_nowait()))
                 except queue.Empty:
-                    trigger_on = False
+                    pass
                 else:
                     self.serial_port_queue.task_done()
 
-            now = time.monotonic()
-            update_pose = now - self._last_pose_update >= self._render_interval
-            render = now - self._last_render >= self._render_interval
-            slice_render = render and (now - self._last_slice_render >= self._slice_render_interval)
             enorm_data = None
-            if update_pose and coil_visible and self.e_field_loaded:
+            if coil_visible and self.e_field_loaded:
                 try:
                     enorm_data = self.e_field_norms_queue.get_nowait()
                 except queue.Empty:
@@ -314,24 +371,13 @@ class UpdateNavigationScene(threading.Thread):
                 else:
                     self.e_field_norms_queue.task_done()
 
-            if update_pose:
-                self._last_pose_update = now
-            if render:
-                self._last_render = now
-            if slice_render:
-                self._last_slice_render = now
-
-            if update_pose or render or tracts_payload is not None or trigger_on:
-                if not self._dispatch_pending and now - self._last_dispatch >= self._loop_sleep:
-                    self._last_dispatch = now
-                    self._dispatch_pending = True
-                    wx.CallAfter(
-                        self._dispatch_updates,
-                        update_pose=update_pose,
-                        render=render,
-                        slice_render=slice_render,
+            if new_pose or tracts_payload is not None or trigger_on or enorm_data is not None:
+                self._queue_update(
+                    dict(
+                        update_pose=new_pose,
+                        slice_render=False,
                         coord=coord,
-                        probe_visible=probe_visible,
+                        probe_visible=marker_visibilities[0],
                         probe_coord=probe_coord,
                         probe_m_img=probe_m_img,
                         coil_visible=coil_visible,
@@ -342,14 +388,13 @@ class UpdateNavigationScene(threading.Thread):
                         trigger_on=trigger_on,
                         enorm_data=enorm_data,
                     )
-
-            self.coord_queue.task_done()
-
-            sleep(self._loop_sleep)
+                )
 
 
 class Navigation(metaclass=Singleton):
     def __init__(self, pedal_connector, neuronavigation_api):
+        if getattr(self, "_workers", None):
+            self.StopNavigation()
         self.pedal_connector = pedal_connector
         self.neuronavigation_api = neuronavigation_api
 
@@ -364,15 +409,9 @@ class Navigation(metaclass=Singleton):
 
         self.all_fiducials = np.zeros((6, 6))
         self.event = threading.Event()
-        self.coord_queue = QueueCustom(maxsize=1)
-        self.object_at_target_queue = QueueCustom(maxsize=1)
-        self.efield_queue = QueueCustom(maxsize=1)
-        self.e_field_norms_queue = QueueCustom(maxsize=1)
-        self.e_field_IDs_queue = QueueCustom(maxsize=1)
-        # self.visualization_queue = QueueCustom(maxsize=1)
-        self.serial_port_queue = QueueCustom(maxsize=1)
-        self.coord_tracts_queue = QueueCustom(maxsize=1)
-        self.tracts_queue = QueueCustom(maxsize=1)
+        self.event.set()
+        self._workers = []
+        self._CreateQueues()
 
         # Tracker parameters
         self.ref_mode_id = const.DEFAULT_REF_MODE
@@ -413,6 +452,16 @@ class Navigation(metaclass=Singleton):
         self.LoadConfig()
 
         self.__bind_events()
+
+    def _CreateQueues(self):
+        self.coord_queue = QueueCustom(maxsize=1)
+        self.object_at_target_queue = QueueCustom(maxsize=1)
+        self.efield_queue = QueueCustom(maxsize=1)
+        self.e_field_norms_queue = QueueCustom(maxsize=1)
+        self.e_field_IDs_queue = QueueCustom(maxsize=1)
+        self.serial_port_queue = QueueCustom(maxsize=1)
+        self.coord_tracts_queue = QueueCustom(maxsize=1)
+        self.tracts_queue = QueueCustom(maxsize=1)
 
     def __bind_events(self):
         Publisher.subscribe(self.CoilAtTarget, "Coil at target")
@@ -605,11 +654,25 @@ class Navigation(metaclass=Singleton):
             return False
 
     def StartNavigation(self, tracker, icp):
-        # initialize jobs list
-        jobs_list = []
+        if self._workers:
+            if not self.event.is_set():
+                return
+            self.StopNavigation()
 
-        if self.event.is_set():
-            self.event.clear()
+        self.event = threading.Event()
+        self._CreateQueues()
+        self.serial_port_connection = None
+        try:
+            self._StartNavigation(tracker, icp)
+        except Exception:
+            self.StopNavigation()
+            raise
+        finally:
+            if not self._workers:
+                self.event.set()
+
+    def _StartNavigation(self, tracker, icp):
+        jobs_list = self._workers
 
         vis_components = [
             self.serial_port_in_use,
@@ -625,8 +688,6 @@ class Navigation(metaclass=Singleton):
             self.e_field_norms_queue,
             self.e_field_IDs_queue,
         ]
-
-        Publisher.sendMessage("Navigation status", nav_status=True, vis_status=vis_components)
 
         if not self.CoilSelectionDone():
             wx.MessageBox(
@@ -757,6 +818,7 @@ class Navigation(metaclass=Singleton):
                     )
                 )
 
+            vis_components[0] = self.serial_port_in_use
             jobs_list.append(
                 UpdateNavigationScene(
                     vis_queues=vis_queues,
@@ -767,44 +829,62 @@ class Navigation(metaclass=Singleton):
                 )
             )
 
-            for jobs in jobs_list:
-                # jobs.daemon = True
-                jobs.start()
-                # del jobs
+            Publisher.sendMessage("Navigation status", nav_status=True, vis_status=vis_components)
+            for worker in jobs_list:
+                run = worker.run
+                event = self.event
+                worker.run = lambda run=run, event=event: self._RunWorker(run, event)
+                worker.start()
 
-            self.pedal_connector.add_callback("navigation", self.PedalStateChanged)
+            if not self.event.is_set():
+                self.pedal_connector.add_callback("navigation", self.PedalStateChanged)
+
+    def _RunWorker(self, run, event):
+        try:
+            run()
+        except Exception as error:
+            logging.exception("Navigation worker failed")
+            event.set()
+            wx.CallAfter(self._OnWorkerError, event, str(error))
+
+    def _OnWorkerError(self, event, message):
+        if event is self.event and self._workers:
+            Publisher.sendMessage("Stop navigation")
+            wx.MessageBox(
+                _("Navigation stopped because a worker failed: {error}").format(error=message),
+                _("Navigation"),
+                wx.OK | wx.ICON_ERROR,
+            )
 
     def StopNavigation(self):
         self.event.set()
+        for worker in self._workers:
+            if isinstance(worker, UpdateNavigationScene):
+                worker.CancelDispatch()
 
         self.pedal_connector.remove_callback("navigation")
 
-        self.coord_queue.clear()
-        self.coord_queue.join()
+        deadline = time.monotonic() + NAVIGATION_STOP_TIMEOUT_SECONDS
+        for worker in self._workers:
+            if worker.ident is not None:
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        self._workers = [worker for worker in self._workers if worker.is_alive()]
+        if self._workers:
+            raise TimeoutError(_("Navigation workers are still stopping. Try again shortly."))
 
-        if self.serial_port_connection is not None:
-            self.serial_port_connection.join()
-
-        if self.serial_port_in_use:
-            self.serial_port_queue.clear()
-            self.serial_port_queue.join()
-
-        if self.view_tracts:
-            self.coord_tracts_queue.clear()
-            self.coord_tracts_queue.join()
-
-            self.tracts_queue.clear()
-            self.tracts_queue.join()
-
-        if self.e_field_loaded:
-            self.efield_queue.clear()
-            self.efield_queue.join()
-
-            self.e_field_norms_queue.clear()
-            self.e_field_norms_queue.join()
-
-            self.e_field_IDs_queue.clear()
-            self.e_field_IDs_queue.join()
+        if self.serial_port_connection is not None and self.serial_port_connection.ident is None:
+            self.serial_port_connection.Disconnect()
+        for pending in (
+            self.coord_queue,
+            self.object_at_target_queue,
+            self.serial_port_queue,
+            self.coord_tracts_queue,
+            self.tracts_queue,
+            self.efield_queue,
+            self.e_field_norms_queue,
+            self.e_field_IDs_queue,
+        ):
+            pending.clear()
 
         vis_components = [
             self.serial_port_in_use,

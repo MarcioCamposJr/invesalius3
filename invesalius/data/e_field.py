@@ -1,6 +1,5 @@
 import queue
 import threading
-import time
 
 import numpy as np
 from vtkmodules.vtkCommonCore import vtkIdList
@@ -115,4 +114,4 @@ class Visualize_E_field_Thread(threading.Thread):
                             self.coord_old = np.array(coord)
                             self.revision_old = revision
 
-            time.sleep(self.sle)
+            self.event.wait(self.sle)

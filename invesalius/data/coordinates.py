@@ -789,4 +789,4 @@ class ReceiveCoordinates(threading.Thread):
                 self.tracker_connection, self.tracker_id, const.DEFAULT_REF_MODE
             )
             self.TrackerCoordinates.SetCoordinates(coord_raw, marker_visibilities)
-            sleep(self.sleep_coord)
+            self.event.wait(self.sleep_coord)

@@ -79,48 +79,49 @@ class SerialPortConnection(threading.Thread):
             print("Serial port thread exiting: No active connection.")
             return
 
-        while not self.event.is_set():
-            trigger_on = False
-            try:
-                lines = self.connection.readlines()
-                has_data = bool(lines)
-            except Exception:
-                print("Error: Serial port could not be read.")
-                has_data = False
-
-            if self.stylusplh:
-                has_data = True
-                self.stylusplh = False
-
-            now = time.monotonic()
-            # Debounce serial input: emit only on rising edge and respect a cooldown.
-            if has_data and not self._trigger_active:
-                if now - self._last_trigger_time >= self._trigger_cooldown:
-                    trigger_on = True
-                    self._last_trigger_time = now
-                self._trigger_active = True
-            elif not has_data:
-                self._trigger_active = False
-
-            if trigger_on:
+        try:
+            while not self.event.is_set():
+                trigger_on = False
                 try:
-                    self.serial_port_queue.put_nowait(True)
-                except queue.Full:
-                    # Drop duplicate trigger if consumer has not yet processed the previous one.
-                    pass
+                    lines = self.connection.readlines()
+                    has_data = bool(lines)
+                except Exception:
+                    print("Error: Serial port could not be read.")
+                    has_data = False
 
-            time.sleep(self.sleep_nav)
+                if self.stylusplh:
+                    has_data = True
+                    self.stylusplh = False
 
-            # XXX: This is needed here because the serial port queue has to be read
-            #      at least as fast as it is written into, otherwise it will eventually
-            #      become full. Reading is done in another thread, which has the same
-            #      sleeping parameter sleep_nav between consecutive runs as this thread.
-            #      However, a single run of that thread takes longer to finish than a
-            #      single run of this thread, causing that thread to lag behind. Hence,
-            #      the additional sleeping here to ensure that this thread lags behind the
-            #      other thread and not the other way around. However, it would be nice to
-            #      handle the timing dependencies between the threads in a more robust way.
-            #
-            time.sleep(0.3)
-        else:
+                now = time.monotonic()
+                # Debounce serial input: emit only on rising edge and respect a cooldown.
+                if has_data and not self._trigger_active:
+                    if now - self._last_trigger_time >= self._trigger_cooldown:
+                        trigger_on = True
+                        self._last_trigger_time = now
+                    self._trigger_active = True
+                elif not has_data:
+                    self._trigger_active = False
+
+                if trigger_on:
+                    try:
+                        self.serial_port_queue.put_nowait(True)
+                    except queue.Full:
+                        # Drop duplicate trigger if consumer has not yet processed the previous one.
+                        pass
+
+                self.event.wait(self.sleep_nav)
+
+                # XXX: This is needed here because the serial port queue has to be read
+                #      at least as fast as it is written into, otherwise it will eventually
+                #      become full. Reading is done in another thread, which has the same
+                #      sleeping parameter sleep_nav between consecutive runs as this thread.
+                #      However, a single run of that thread takes longer to finish than a
+                #      single run of this thread, causing that thread to lag behind. Hence,
+                #      the additional sleeping here to ensure that this thread lags behind the
+                #      other thread and not the other way around. However, it would be nice to
+                #      handle the timing dependencies between the threads in a more robust way.
+                #
+                self.event.wait(0.3)
+        finally:
             self.Disconnect()

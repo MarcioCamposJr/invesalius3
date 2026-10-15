@@ -23,7 +23,6 @@
 
 import queue
 import threading
-import time
 
 import numpy as np
 from vtkmodules.vtkCommonCore import vtkPoints, vtkUnsignedCharArray
@@ -374,7 +373,7 @@ class ComputeTractsThread(threading.Thread):
                 self.coord_tracts_queue.task_done()
 
             # sleep required to prevent user interface from being unresponsive
-            time.sleep(self.sle)
+            self.event.wait(self.sle)
 
 
 class ComputeTractsACTThread(threading.Thread):
@@ -614,7 +613,7 @@ class ComputeTractsACTThread(threading.Thread):
                 self.coord_tracts_queue.task_done()
 
             # sleep required to prevent user interface from being unresponsive
-            time.sleep(self.sleep_thread)
+            self.event.wait(self.sleep_thread)
 
 
 def set_trekker_parameters(trekker, params):
