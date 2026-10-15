@@ -17,6 +17,19 @@
 #    detalhes.
 # --------------------------------------------------------------------------
 
+"""Coordinate navigation workers and deliver their results to the GUI.
+
+Tracker acquisition is managed separately by ``Tracker``. During navigation,
+the coregistration worker converts tracker coordinates into image-space poses
+and publishes them to ``coord_queue``. Optional workers exchange serial
+triggers, tract geometry and electric-field results through their own queues.
+``UpdateNavigationScene`` collects these outputs in a worker thread, then uses
+wx callbacks to apply the pending scene state on the GUI thread.
+
+Each navigation run owns a stop event, queues and worker references. A new run
+must not reuse these resources while any worker from the previous run is alive.
+"""
+
 import logging
 import queue
 import threading
@@ -50,6 +63,7 @@ from invesalius.net.pedal_connection import PedalConnector
 from invesalius.pubsub import pub as Publisher
 from invesalius.utils import Singleton
 
+# Total join budget for all workers together, rather than a timeout per worker.
 NAVIGATION_STOP_TIMEOUT_SECONDS = 2.0
 
 
@@ -89,16 +103,19 @@ class NavigationHub(metaclass=Singleton):
 
 
 class QueueCustom(queue.Queue):
-    """
-    A custom queue subclass that provides a :meth:`clear` method.
+    """FIFO queue with explicit cleanup and replacement of waiting poses.
+
     https://stackoverflow.com/questions/6517953/clear-all-items-from-the-queue
     Pose producers can replace waiting entries with ``put_latest`` without
     changing the task accounting of an item already being processed.
+    Event producers, such as serial triggers, use the normal queue API instead.
     """
 
     def clear(self):
-        """
-        Clears all items from the queue.
+        """Discard waiting items while keeping in-flight task accounting intact.
+
+        This does not stop producers or consumers. Navigation clears its queues
+        only after its workers have exited.
         """
 
         with self.mutex:
@@ -112,6 +129,12 @@ class QueueCustom(queue.Queue):
             self.not_full.notify_all()
 
     def put_latest(self, item):
+        """Atomically replace all waiting entries with the newest pose payload.
+
+        Removed entries no longer need ``task_done()``; an item already taken
+        by a consumer still does. Intermediate poses may be skipped so that a
+        slow consumer receives recent data instead of accumulating latency.
+        """
         with self.not_full:
             while self._qsize():
                 self._get()
@@ -122,21 +145,27 @@ class QueueCustom(queue.Queue):
 
 
 class UpdateNavigationScene(threading.Thread):
+    """Collect worker results and maintain one pending GUI dispatch chain.
+
+    ``run()`` reads queues in this worker thread. ``_queue_update()`` replaces
+    pending poses and retains pending results under a lock. ``_flush_updates()``
+    and ``_dispatch_updates()`` run on the GUI thread, where wx/VTK scene updates
+    are applied. A stopped session cannot deliver its queued updates to a later
+    navigation run because this instance keeps its original stop event.
+    """
+
     def __init__(self, vis_queues, vis_components, event, sle, neuronavigation_api):
-        """Class (threading) to update the navigation scene with all graphical elements.
+        """Capture the queues, display options and stop event for one run.
 
-        Sleep function in run method is used to avoid blocking GUI and more fluent, real-time navigation
-
-        :param affine_vtk: Affine matrix in vtkMatrix4x4 instance to update objects position in 3D scene
-        :type affine_vtk: vtkMatrix4x4
-        :param visualization_queue: Queue instance that manage coordinates to be visualized
-        :type visualization_queue: queue.Queue
-        :param event: Threading event to coordinate when tasks as done and allow UI release
-        :type event: threading.Event
-        :param sle: Sleep pause in seconds
-        :type sle: float
-        :param neuronavigation_api: An API object for communicating the coil position.
-        :type neuronavigation_api: invesalius.net.neuronavigation_api.NeuronavigationAPI
+        :param vis_queues: Pose, serial-trigger, tract-result, electric-field
+            result and electric-field region-ID queues, in that order.
+        :param vis_components: Serial, tractography, peel, electric-field and
+            electric-field vector display flags, in that order.
+        :param event: Session stop signal; once set, it remains set for this run.
+        :param sle: Navigation interval in seconds, captured when starting.
+            GUI dispatches are limited to 100 Hz and slice renders to 10 Hz,
+            or slower when this interval is larger.
+        :param neuronavigation_api: External neuronavigation API connection.
         """
 
         threading.Thread.__init__(self, name="UpdateScene")
@@ -159,10 +188,16 @@ class UpdateNavigationScene(threading.Thread):
         self.neuronavigation_api = neuronavigation_api
         self.navigation = Navigation()
         self._slice_render_interval = max(self.sle, 1.0 / 10.0)
+        # Shared between the collector thread and GUI callbacks. Never hold
+        # this lock while publishing messages or requesting a render.
         self._dispatch_lock = threading.Lock()
+        # One replaceable payload containing the latest pose and retained results.
         self._pending_update = None
+        # GUI-owned one-shot timer used when the next dispatch is not due yet.
         self._dispatch_timer = None
+        # perf_counter timestamps record actual GUI dispatch/render requests.
         self._last_dispatch = 0.0
+        # True while a flush is queued, delayed by a timer, or being applied.
         self._dispatch_pending = False
         self._last_slice_render = 0.0
 
@@ -183,6 +218,16 @@ class UpdateNavigationScene(threading.Thread):
         trigger_on,
         enorm_data,
     ):
+        """Apply a merged payload and request rendering on the GUI thread.
+
+        ``coord`` follows the selected object; ``coords`` and ``m_imgs`` map
+        coil names to poses and image-space transformation matrices. Probe
+        data is passed separately. ``update_pose`` controls pose application,
+        while optional results can be delivered without a new pose.
+        ``trigger_on`` is the accumulated number of consumed serial triggers.
+        """
+        # wx.CallAfter callbacks cannot be removed from the event queue, so
+        # callbacks left behind by a stopped run must become harmless here.
         if self.event.is_set():
             return
         if tracts_payload is not None:
@@ -262,6 +307,12 @@ class UpdateNavigationScene(threading.Thread):
             Publisher.sendMessage("Update slice viewer")
 
     def _queue_update(self, update):
+        """Merge collector output into the pending state and schedule one flush.
+
+        The newest payload supplies the pose. Trigger counts accumulate, and
+        pending tract/E-field results survive a pose-only update for the same
+        main coil. This bounds scheduled GUI work when the GUI falls behind.
+        """
         with self._dispatch_lock:
             if self.event.is_set():
                 return
@@ -280,6 +331,12 @@ class UpdateNavigationScene(threading.Thread):
             wx.CallAfter(self._flush_updates)
 
     def _flush_updates(self):
+        """Deliver the latest pending state at the allowed GUI update interval.
+
+        A one-shot wx timer delays an early callback without sleeping on the
+        GUI thread. Updates arriving during that delay replace the pending
+        payload. Updates arriving during dispatch schedule a subsequent flush.
+        """
         self._dispatch_timer = None
         if self.event.is_set():
             self.CancelDispatch()
@@ -303,6 +360,8 @@ class UpdateNavigationScene(threading.Thread):
                     self._last_slice_render = now
                 self._dispatch_updates(**update)
         finally:
+            # The collector may have published another pose while subscribers
+            # handled the current one. Keep a single dispatch chain alive.
             with self._dispatch_lock:
                 schedule = self._pending_update is not None and not self.event.is_set()
                 self._dispatch_pending = schedule
@@ -310,6 +369,12 @@ class UpdateNavigationScene(threading.Thread):
                 wx.CallAfter(self._flush_updates)
 
     def CancelDispatch(self):
+        """Stop the GUI timer and discard pending data on the GUI thread.
+
+        The caller sets the session event first, preventing the collector from
+        scheduling more updates. Already queued wx callbacks check that event
+        when they execute.
+        """
         if self._dispatch_timer is not None:
             self._dispatch_timer.Stop()
             self._dispatch_timer = None
@@ -318,6 +383,9 @@ class UpdateNavigationScene(threading.Thread):
             self._dispatch_pending = False
 
     def run(self):
+        """Collect poses and optional results until this session is stopped."""
+        # Keep the last pose so optional results can be delivered even when
+        # no new pose arrives during the next bounded queue wait.
         latest = None
         while not self.event.is_set():
             new_pose = False
@@ -326,6 +394,8 @@ class UpdateNavigationScene(threading.Thread):
             except queue.Empty:
                 pass
             else:
+                # The payload is now owned by this collector; acknowledging it
+                # does not mean that the GUI has rendered it yet.
                 self.coord_queue.task_done()
                 new_pose = True
             if self.event.is_set() or latest is None:
@@ -341,6 +411,7 @@ class UpdateNavigationScene(threading.Thread):
             if coord is None:
                 continue
             probe_coord, probe_m_img = coords["probe"], m_imgs["probe"]
+            # Build coil-only maps without modifying the retained pose packet.
             coords = {name: pose for name, pose in coords.items() if name != "probe"}
             m_imgs = {name: matrix for name, matrix in m_imgs.items() if name != "probe"}
 
@@ -392,7 +463,17 @@ class UpdateNavigationScene(threading.Thread):
 
 
 class Navigation(metaclass=Singleton):
+    """Store navigation configuration and manage one worker session at a time.
+
+    The singleton can outlive multiple starts and stops. Worker objects, queues
+    and the stop event belong to a single run and are recreated for the next
+    one. Tracker acquisition has a separate lifetime and is not stopped here.
+    Lifecycle methods are called from the GUI thread; worker failures are
+    forwarded there with ``wx.CallAfter``.
+    """
+
     def __init__(self, pedal_connector, neuronavigation_api):
+        # Explicit reinitialization must not overwrite live worker references.
         if getattr(self, "_workers", None):
             self.StopNavigation()
         self.pedal_connector = pedal_connector
@@ -403,13 +484,18 @@ class Navigation(metaclass=Singleton):
         self.coil_registrations = {}
         self.track_coil = False
         self.main_coil = None  # Which coil to track with pointer
+        # Fiducial-based tracker-to-image transform and saved stylus alignment.
         self.m_change = None
         self.r_stylus = None
         self.obj_datas = None  # This is accessed by the robot, gets value at StartNavigation
 
         self.all_fiducials = np.zeros((6, 6))
+        # Set means inactive/stopping. StartNavigation creates a new, unset
+        # event instead of clearing one that an older worker may still hold.
         self.event = threading.Event()
         self.event.set()
+        # Includes constructed workers during startup and any workers still
+        # alive after a stop timeout, so the next start can wait for them.
         self._workers = []
         self._CreateQueues()
 
@@ -419,6 +505,7 @@ class Navigation(metaclass=Singleton):
         self.e_field_loaded = False
         self.plot_efield_vectors = False
         self.debug_efield_enorm = None
+        # Configuration revision for E-field results; this is not a pose counter.
         self.e_field_revision = 0
 
         # Tractography parameters
@@ -454,12 +541,24 @@ class Navigation(metaclass=Singleton):
         self.__bind_events()
 
     def _CreateQueues(self):
+        """Allocate bounded communication queues for the next navigation run.
+
+        Poses use ``put_latest`` to replace stale waiting data. Other channels
+        retain their normal queue behavior; capacity one alone does not imply
+        replacement. New queue objects isolate consecutive navigation runs.
+        """
+        # Coregistration -> scene collector: (coords, visibilities, matrices).
         self.coord_queue = QueueCustom(maxsize=1)
+        # Target-state feedback consumed by coregistration.
         self.object_at_target_queue = QueueCustom(maxsize=1)
+        # Coregistration -> E-field worker; E-field worker -> scene collector;
+        # GUI region lookup -> E-field worker, respectively.
         self.efield_queue = QueueCustom(maxsize=1)
         self.e_field_norms_queue = QueueCustom(maxsize=1)
         self.e_field_IDs_queue = QueueCustom(maxsize=1)
+        # Serial worker -> scene collector (trigger events).
         self.serial_port_queue = QueueCustom(maxsize=1)
+        # Coregistration or E-field seed selection -> tract worker -> collector.
         self.coord_tracts_queue = QueueCustom(maxsize=1)
         self.tracts_queue = QueueCustom(maxsize=1)
 
@@ -493,6 +592,7 @@ class Navigation(metaclass=Singleton):
             session.SetConfig("navigation", state)
 
     def LoadConfig(self):
+        """Restore selected coil registrations and saved navigation settings."""
         session = ses.Session()
         state = session.GetConfig("navigation")
 
@@ -523,6 +623,7 @@ class Navigation(metaclass=Singleton):
                 self.r_stylus = np.array(state["r_stylus"])
 
     def CoilSelectionDone(self):
+        """Return whether the configured number of coils has been selected."""
         return len(self.coil_registrations) == self.n_coils
 
     def SelectCoil(self, coil_name, coil_registration):
@@ -550,6 +651,10 @@ class Navigation(metaclass=Singleton):
         self.target = None
 
     def UpdateNavSleep(self, sleep):
+        """Set the interval passed to workers on their next construction.
+
+        Existing workers keep the intervals captured when they were created.
+        """
         self.sleep_nav = sleep
         # self.serial_port_connection.sleep_nav = sleep
 
@@ -589,6 +694,7 @@ class Navigation(metaclass=Singleton):
         return self.ref_mode_id
 
     def UpdateFiducialRegistrationError(self, tracker, image):
+        """Recompute registration error from the current image/tracker fiducials."""
         tracker_fiducials, tracker_fiducials_raw = tracker.GetTrackerFiducials()
         image_fiducials = image.GetImageFiducials()
 
@@ -599,10 +705,12 @@ class Navigation(metaclass=Singleton):
         )
 
     def GetFiducialRegistrationError(self, icp):
+        """Return the active registration error and whether it meets the threshold."""
         fre = icp.icp_fre if icp.use_icp else self.fre
         return fre, fre <= const.FIDUCIAL_REGISTRATION_ERROR_THRESHOLD
 
     def PedalStateChanged(self, state):
+        """Send a serial pulse on pedal activation when target locking permits it."""
         if not self.serial_port_in_use:
             return
 
@@ -614,6 +722,7 @@ class Navigation(metaclass=Singleton):
             self.serial_port_connection.SendPulse()
 
     def EstimateTrackerToInVTransformationMatrix(self, tracker, image):
+        """Fit the rigid tracker-to-image transform from matching fiducials."""
         tracker_fiducials, tracker_fiducials_raw = tracker.GetTrackerFiducials()
         image_fiducials = image.GetImageFiducials()
 
@@ -624,6 +733,7 @@ class Navigation(metaclass=Singleton):
         )
 
     def OnRecordStylusOrientation(self, coord_raw):
+        """Store stylus alignment using the current registration and reference mode."""
         if self.m_change is not None:
             m_probe = dcr.compute_marker_transformation(coord_raw, 0)
 
@@ -654,11 +764,20 @@ class Navigation(metaclass=Singleton):
             return False
 
     def StartNavigation(self, tracker, icp):
+        """Start a session after all workers from the previous one have exited.
+
+        Repeated starts during an active run do nothing. A previous run whose
+        stop was requested must finish before its resources can be replaced;
+        ``StopNavigation`` raises ``TimeoutError`` if workers are still alive.
+        Partial startup failures also go through the same cleanup path.
+        """
         if self._workers:
             if not self.event.is_set():
                 return
             self.StopNavigation()
 
+        # Never clear the old event: stopped workers and queued callbacks must
+        # continue seeing the stop request even after this session starts.
         self.event = threading.Event()
         self._CreateQueues()
         self.serial_port_connection = None
@@ -668,10 +787,20 @@ class Navigation(metaclass=Singleton):
             self.StopNavigation()
             raise
         finally:
+            # Validation may return without constructing workers. Such a run
+            # must remain inactive rather than exposing an unset stop event.
             if not self._workers:
                 self.event.set()
 
     def _StartNavigation(self, tracker, icp):
+        """Validate coil setup, construct enabled workers and launch the pipeline.
+
+        Constructed workers are retained in ``self._workers`` before any thread
+        starts, allowing partial startup to be cleaned up by the caller.
+        Coregistration and scene collection always run; serial communication,
+        tractography and E-field computation depend on the selected features.
+        """
+        # This is the session's retained list, not a temporary startup-only list.
         jobs_list = self._workers
 
         vis_components = [
@@ -833,6 +962,8 @@ class Navigation(metaclass=Singleton):
             for worker in jobs_list:
                 run = worker.run
                 event = self.event
+                # Bind both values now: the loop and a later session must not
+                # change the run method or event used by this failure handler.
                 worker.run = lambda run=run, event=event: self._RunWorker(run, event)
                 worker.start()
 
@@ -840,6 +971,11 @@ class Navigation(metaclass=Singleton):
                 self.pedal_connector.add_callback("navigation", self.PedalStateChanged)
 
     def _RunWorker(self, run, event):
+        """Run a worker entry point and forward unexpected failures to the GUI.
+
+        Signal this worker's original event immediately so sibling workers can
+        stop, then defer UI shutdown and error reporting to the main thread.
+        """
         try:
             run()
         except Exception as error:
@@ -848,6 +984,11 @@ class Navigation(metaclass=Singleton):
             wx.CallAfter(self._OnWorkerError, event, str(error))
 
     def _OnWorkerError(self, event, message):
+        """Handle a failure only if its originating session is still tracked.
+
+        An error callback can remain queued while navigation stops or restarts.
+        Event identity prevents that callback from stopping the newer session.
+        """
         if event is self.event and self._workers:
             Publisher.sendMessage("Stop navigation")
             wx.MessageBox(
@@ -857,6 +998,17 @@ class Navigation(metaclass=Singleton):
             )
 
     def StopNavigation(self):
+        """Request shutdown, cancel scene dispatches and join session workers.
+
+        All joins share one deadline. If a worker is still alive, keep its
+        reference and raise ``TimeoutError`` so a new session cannot replace
+        resources that it may still access. Queues are cleared and the inactive
+        status is published only after every worker has exited.
+
+        ``Queue.join()`` would only wait for task acknowledgments, which can
+        happen before computation or GUI rendering finishes. ``Thread.join()``
+        is needed here to guarantee that worker execution has actually ended.
+        """
         self.event.set()
         for worker in self._workers:
             if isinstance(worker, UpdateNavigationScene):
@@ -866,12 +1018,15 @@ class Navigation(metaclass=Singleton):
 
         deadline = time.monotonic() + NAVIGATION_STOP_TIMEOUT_SECONDS
         for worker in self._workers:
+            # A startup failure can leave constructed but never-started workers.
             if worker.ident is not None:
                 worker.join(timeout=max(0.0, deadline - time.monotonic()))
         self._workers = [worker for worker in self._workers if worker.is_alive()]
         if self._workers:
             raise TimeoutError(_("Navigation workers are still stopping. Try again shortly."))
 
+        # A serial port may have opened successfully before another constructor
+        # failed. No serial worker ran in that case to close it in its finally.
         if self.serial_port_connection is not None and self.serial_port_connection.ident is None:
             self.serial_port_connection.Disconnect()
         for pending in (
@@ -896,4 +1051,5 @@ class Navigation(metaclass=Singleton):
         Publisher.sendMessage("Navigation status", nav_status=False, vis_status=vis_components)
 
     def MarkEfieldParametersChanged(self):
+        """Advance the configuration revision used to identify E-field results."""
         self.e_field_revision += 1
