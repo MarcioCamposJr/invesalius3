@@ -1,3 +1,22 @@
+# --------------------------------------------------------------------------
+# Software:     InVesalius - Software de Reconstrucao 3D de Imagens Medicas
+# Copyright:    (C) 2001  Centro de Pesquisas Renato Archer
+# Homepage:     http://www.softwarepublico.gov.br
+# Contact:      invesalius@cti.gov.br
+# License:      GNU - GPL 2 (LICENSE.txt/LICENCA.txt)
+# --------------------------------------------------------------------------
+#    Este programa e software livre; voce pode redistribui-lo e/ou
+#    modifica-lo sob os termos da Licenca Publica Geral GNU, conforme
+#    publicada pela Free Software Foundation; de acordo com a versao 2
+#    da Licenca.
+#
+#    Este programa eh distribuido na expectativa de ser util, mas SEM
+#    QUALQUER GARANTIA; sem mesmo a garantia implicita de
+#    COMERCIALIZACAO ou de ADEQUACAO A QUALQUER PROPOSITO EM
+#    PARTICULAR. Consulte a Licenca Publica Geral GNU para obter mais
+#    detalhes.
+# --------------------------------------------------------------------------
+
 import numpy as np
 import pyacvd
 
@@ -32,11 +51,9 @@ from vtkmodules.vtkFiltersGeneral import vtkTransformPolyDataFilter, vtkWarpVect
 from vtkmodules.vtkFiltersModeling import vtkLinearSubdivisionFilter
 from vtkmodules.vtkImagingCore import vtkImageFlip
 from vtkmodules.vtkIOImage import vtkNIFTIImageReader
-from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor
 from vtkmodules.vtkRenderingCore import (
     vtkActor,
     vtkPolyDataMapper,
-    vtkTextProperty,
     vtkWindowLevelLookupTable,
 )
 
@@ -350,19 +367,6 @@ class E_field_brain:
         self.e_field_mesh_normals = GetNormals(mesh)
         self.e_field_mesh_centers = GetCenters(mesh)
         self.e_field_mesh = mesh
-
-        self.efield_mapper = vtkPolyDataMapper()
-
-        text_property = vtkTextProperty()
-        text_property.SetFontSize(3)
-        text_property.SetJustificationToCentered()
-
-        self.efield_scalar_bar = vtkScalarBarActor()
-        self.efield_scalar_bar.SetOrientationToVertical()
-        self.efield_scalar_bar.SetTitle("E (V/m)")
-        self.efield_scalar_bar.SetNumberOfLabels(2)
-        self.efield_scalar_bar.SetTitleTextProperty(text_property)
-        # self.lut = CreateLUTTableForEfield(0, 0.005)
 
 
 class Scalp:
