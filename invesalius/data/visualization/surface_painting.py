@@ -254,6 +254,7 @@ class SurfacePainting(metaclass=Singleton):
         self.modes = {}
         self.targets = {}
         self.tokens = {}
+        self.static_maps = {}
         self.navigation_mode = Session().GetConfig("mode") == const.MODE_NAVIGATOR
         Publisher.subscribe(self.set_navigation_mode, "Set surface navigation mode")
         Publisher.subscribe(self.remove_surface, "Discard surface painting")
@@ -295,6 +296,7 @@ class SurfacePainting(metaclass=Singleton):
 
     def select(self, surface, name=""):
         if not name:
+            self.clear_static_map(surface)
             if surface is not None and surface.painting_mode:
                 self.stop(surface.painting_mode)
             return True
@@ -305,6 +307,7 @@ class SurfacePainting(metaclass=Singleton):
             return False
         if mode not in self.available_modes(surface):
             return False
+        self.clear_static_map(surface)
         if self.targets.get(name) is surface and name in self.tokens:
             return True
         self.stop(name)
@@ -343,7 +346,24 @@ class SurfacePainting(metaclass=Singleton):
         Publisher.sendMessage("Update surface presentation", surface=surface)
         Publisher.sendMessage("Render volume viewer")
 
+    def show_static_map(self, surface, surface_map):
+        if surface.painting_mode:
+            self.stop(surface.painting_mode)
+        self.static_maps[surface] = surface_map
+        surface.display_map = surface_map
+        self._changed(surface)
+
+    def clear_static_map(self, surface):
+        surface_map = self.static_maps.pop(surface, None)
+        if surface_map is not None:
+            surface.display_map = surface.frozen_map
+            Publisher.sendMessage(
+                "Static surface map removed", surface=surface, surface_map=surface_map
+            )
+            self._changed(surface)
+
     def remove_surface(self, surface):
+        self.clear_static_map(surface)
         for name, target in list(self.targets.items()):
             if target is surface:
                 self.stop(name)
@@ -359,10 +379,12 @@ class SurfacePainting(metaclass=Singleton):
                     self.stop(name)
         for surface in Project().surface_dict.values():
             if not surface.painting_mode:
-                surface.display_map = surface.frozen_map
+                surface.display_map = self.static_maps.get(surface, surface.frozen_map)
             self._changed(surface)
 
     def close(self):
+        for surface in list(self.static_maps):
+            self.clear_static_map(surface)
         for name in list(self.tokens):
             self.stop(name)
         self.targets.clear()

@@ -32,12 +32,12 @@ from vtkmodules.vtkFiltersCore import vtkCutter
 from vtkmodules.vtkFiltersGeneral import vtkTransformPolyDataFilter
 from vtkmodules.vtkIOLegacy import vtkPolyDataReader
 from vtkmodules.vtkIOXML import vtkXMLPolyDataReader
-from vtkmodules.vtkRenderingCore import vtkPolyDataMapper
 
 import invesalius.constants as const
 import invesalius.data.slice_ as sl
 import invesalius.project as prj
-from invesalius.data.visualization.surface_map_visualizer import ColorBar
+from invesalius.data.visualization.surface_map_visualizer import ColorBar, SurfaceMap
+from invesalius.data.visualization.surface_painting import SurfacePainting
 from invesalius.i18n import tr as _
 from invesalius.pubsub import pub as Publisher
 
@@ -233,6 +233,7 @@ class SimnibsEfieldVisualizer:
         self.ren = ren
         self.actor_factory = actor_factory
         self.render = render
+        self.painting = SurfacePainting()
         self.source = None
         self.targets = []
         self.surface_actor = None
@@ -243,7 +244,6 @@ class SimnibsEfieldVisualizer:
         self.threshold = const.EFIELD_MAX_RANGE_SCALE
         self.highlight = False
         self.maximum = 0.0
-        self.scalar_bar = None
         self.arrows = []
         self._reply = None
         self._bind_events()
@@ -259,8 +259,10 @@ class SimnibsEfieldVisualizer:
         Publisher.subscribe(self.Release, "Remove surface actor from viewer")
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         Publisher.subscribe(self.OnActor, "Send Actor")
+        Publisher.subscribe(self.OnStaticMapRemoved, "Static surface map removed")
 
     def dispose(self):
+        self.Remove()
         Publisher.unsubscribe_owner(self)
 
     def Load(
@@ -336,6 +338,12 @@ class SimnibsEfieldVisualizer:
     def OnActor(self, e_field_actor):
         self._reply = e_field_actor
 
+    def OnStaticMapRemoved(self, surface, surface_map):
+        if any(target.get("map") is surface_map for target in self.targets):
+            self._Clear()
+            self._TellCrossSections([])
+            self.render()
+
     def _Paint(self, target_surfaces, choose=False):
         polydata, norms, _vectors = self.source
         painted, refused = self._Prepare(target_surfaces or [], polydata, norms)
@@ -378,6 +386,7 @@ class SimnibsEfieldVisualizer:
             painted.append(
                 {
                     "actor": actor,
+                    "surface": surface_dict[surface_index],
                     "name": name,
                     "geometry": geometry,
                     "display": ShareGeometry(geometry),
@@ -385,9 +394,7 @@ class SimnibsEfieldVisualizer:
                     "point_ids": point_ids,
                     "source_ids": source_ids,
                     "coverage": coverage,
-                    "mapper": None,
                     "opacity": 1.0,
-                    "backface_culling": 0,
                 }
             )
         return painted, refused
@@ -436,15 +443,7 @@ class SimnibsEfieldVisualizer:
         for target in painted:
             actor = target["actor"]
             prop = actor.GetProperty()
-            target["mapper"] = actor.GetMapper()
             target["opacity"] = prop.GetOpacity()
-            target["backface_culling"] = prop.GetBackfaceCulling()
-
-            mapper = vtkPolyDataMapper()
-            mapper.SetInputData(target["display"])
-            mapper.ScalarVisibilityOn()
-            actor.SetMapper(mapper)
-            prop.SetBackfaceCulling(1)
 
         self.targets = painted
         self.maximum = float(np.max(painted[0]["values"]))
@@ -452,19 +451,14 @@ class SimnibsEfieldVisualizer:
         self._Draw()
 
     def _Hide(self):
-        for target in self.targets:
+        targets, self.targets = self.targets, []
+        for target in targets:
             actor = target["actor"]
-            if target["mapper"] is not None:
-                actor.SetMapper(target["mapper"])
             actor.GetProperty().SetOpacity(target["opacity"])
-            actor.GetProperty().SetBackfaceCulling(target["backface_culling"])
-        self.targets = []
+            self.painting.clear_static_map(target["surface"])
 
     def _Clear(self):
         self._RemoveArrows()
-        if self.scalar_bar is not None:
-            self.ren.RemoveActor2D(self.scalar_bar)
-            self.scalar_bar = None
         self._Hide()
         self.source = None
 
@@ -475,6 +469,7 @@ class SimnibsEfieldVisualizer:
         if len(targets) < 2:
             for target in targets:
                 target["actor"].GetProperty().SetOpacity(base)
+                Publisher.sendMessage("Update surface presentation", surface=target["surface"])
             return
 
         outer = min(const.SIMNIBS_EFIELD_OUTER_OPACITY, base)
@@ -483,6 +478,7 @@ class SimnibsEfieldVisualizer:
         for rank, target in enumerate(order):
             opacity = outer + (base - outer) * rank / (len(order) - 1)
             target["actor"].GetProperty().SetOpacity(opacity)
+            Publisher.sendMessage("Update surface presentation", surface=target["surface"])
 
     def _Redraw(self):
         if self.targets:
@@ -491,15 +487,20 @@ class SimnibsEfieldVisualizer:
 
     def _Draw(self):
         lut = self._Lut()
-        for target in self.targets:
+        for index, target in enumerate(self.targets):
             self._Colour(target, lut)
-
-        if self.scalar_bar is None:
-            self.scalar_bar = ColorBar(
-                position=(0.82, 0.1), compact=False, title="E (V/m)"
-            ).create_actor()
-            self.ren.AddActor2D(self.scalar_bar)
-        self.scalar_bar.SetLookupTable(lut)
+            target["map"] = SurfaceMap(
+                target["display"],
+                lut,
+                (0.0, self.maximum),
+                "SimNIBS E-field",
+                "V/m",
+                color_array=COLORS_ARRAY_NAME,
+                color_bar=ColorBar(
+                    position=(0.82, 0.1), compact=False, title="E (V/m)", visible=index == 0
+                ),
+            )
+            self.painting.show_static_map(target["surface"], target["map"])
 
         self._ShowArrows()
         self.render()

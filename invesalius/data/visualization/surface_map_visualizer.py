@@ -40,13 +40,18 @@ class ColorBar:
     position: tuple = (0.06, 0.06)
     compact: bool = True
     title: str = ""
+    visible: bool = True
 
     def __post_init__(self):
         if len(self.position) != 2 or not all(
             isfinite(value) and 0 <= value <= 1 for value in self.position
         ):
             raise ValueError("Color bar position must contain two normalized coordinates.")
-        if not isinstance(self.compact, bool) or not isinstance(self.title, str):
+        if (
+            not isinstance(self.compact, bool)
+            or not isinstance(self.title, str)
+            or not isinstance(self.visible, bool)
+        ):
             raise ValueError("Invalid color bar appearance.")
 
     def create_actor(self):
@@ -206,5 +211,5 @@ class SurfaceMapVisualizer:
         self.scalar_bar.SetTitle(self.color_bar.title or f"{surface_map.unit}       ")
 
     def show(self, visible):
-        for actor in self.actors:
-            actor.SetVisibility(visible)
+        self.actor.SetVisibility(visible)
+        self.scalar_bar.SetVisibility(visible and self.color_bar.visible)
