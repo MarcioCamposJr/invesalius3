@@ -485,6 +485,18 @@ class EFieldVisualizer:
         elif not self.efield_tools and self.ClusterEfieldTextActor is not None:
             self.ren.RemoveActor(self.ClusterEfieldTextActor.actor)
             self.ren.RemoveActor(self.SpreadEfieldFactorTextActor.actor)
+        if self.efield.static_efield:
+            self.UpdateStaticEfieldTools()
+
+    def UpdateStaticEfieldTools(self):
+        self.RemoveEfieldEdges()
+        if self.show_efield_edges:
+            self.ShowEfieldContours(True)
+        if self.efield_tools:
+            self.CalculateDistanceMaxEfieldCoGE()
+            self.DetectClustersEfieldSpread(self.efield.positions_above_threshold)
+        self.ShowEfieldAtCortexTarget()
+        self.Refresh()
 
     def DetectClustersEfieldSpread(self, points):
         from sklearn.cluster import DBSCAN
@@ -569,6 +581,8 @@ class EFieldVisualizer:
         position_flip[1] = -position_flip[1]
         self.efield.target_at_cortex = position_flip
         self.CreateEfieldAtTargetLegend()
+        if self.efield.static_efield:
+            self.ShowEfieldAtCortexTarget()
 
     def ShowEfieldAtCortexTarget(self):
         if self.efield.target_at_cortex is not None:

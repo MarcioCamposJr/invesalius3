@@ -50,6 +50,8 @@ class EFieldNavigation:
         self.plot_no_connection = False
         self.efield_mesh = None
         self.e_field_norms = None
+        self.static_efield = False
+        self.max_efield_array = None
         self.efield_threshold = const.EFIELD_MAX_RANGE_SCALE
         self.efield_ROISize = const.EFIELD_ROI_SIZE
         self.efield_painting_token = None
@@ -61,6 +63,7 @@ class EFieldNavigation:
         self.target_radius_list = []
         self.visualizer = EFieldVisualizer(self, scene, interactor, actor_factory, refresh)
         self._bind_events()
+        Publisher.sendMessage("Request static E-field")
 
     def dispose(self):
         Publisher.unsubscribe_owner(self)
@@ -68,6 +71,8 @@ class EFieldNavigation:
         self.visualizer.dispose()
 
     def _bind_events(self):
+        Publisher.subscribe(self.SetStaticEfield, "Update static E-field")
+        Publisher.subscribe(self.ClearStaticEfield, "Clear static E-field")
         Publisher.subscribe(
             self.UpdateEfieldPointLocation, "Update point location for e-field calculation"
         )
@@ -107,11 +112,13 @@ class EFieldNavigation:
         self.visualizer.clear()
 
     def CoGEforCortexMarker(self):
-        if self.e_field_norms is not None:
+        if self.e_field_norms is not None and self.max_efield_array is not None:
             [cell_id_indexes, positions_above_threshold] = self.GetIndexesAboveThreshold(0.98)
             center_gravity_position_for_marker = self.FindCenterofGravity(
                 cell_id_indexes, positions_above_threshold
             )
+            if center_gravity_position_for_marker is None:
+                return
             center_gravity_orientation_for_marker = [
                 self.max_efield_array[0],
                 self.max_efield_array[1],
@@ -304,9 +311,8 @@ class EFieldNavigation:
         if not cell_id_indexes or not positions:
             return None
 
-        weights = []
-        for index, value in enumerate(cell_id_indexes):
-            weights.append(self.e_field_norms[index])
+        values_by_id = dict(zip(self.Id_list, self.e_field_norms))
+        weights = [values_by_id[point_id] for point_id in cell_id_indexes]
         sum_weights = sum(weights)
         if sum_weights == 0:
             return None
@@ -369,6 +375,7 @@ class EFieldNavigation:
         self.scalp_actor = scalp_actor
 
     def InitEfield(self, e_field_brain, painting_token):
+        self.static_efield = False
         self.efield_painting_token = painting_token
         self.e_field_mesh_normals = e_field_brain.e_field_mesh_normals
         self.e_field_mesh_centers = e_field_brain.e_field_mesh_centers
@@ -394,6 +401,44 @@ class EFieldNavigation:
         self.visualizer.efield_lut = self.visualizer.CreateLUTTableForEfield(0, 1)
         self.visualizer.InitializeColorArray()
         self.visualizer.RecolorEfieldActor()
+
+    def SetStaticEfield(self, polydata, values, point_ids, vectors, threshold):
+        from invesalius.data.e_field import EFieldBrain
+
+        if not self.static_efield or self.efield_mesh is not polydata:
+            self.InitEfield(EFieldBrain(polydata), painting_token=None)
+        self.static_efield = True
+        self.Id_list = point_ids
+        self.radius_list.Reset()
+        for point_id in point_ids:
+            self.radius_list.InsertNextId(point_id)
+        self.e_field_norms = self.e_field_norms_to_save = values
+        self.efield_min = float(np.min(values))
+        self.efield_max = float(np.max(values))
+        self.efield_threshold = threshold
+        top = int(np.argmax(values))
+        self.Idmax = point_ids[top]
+        self.max_efield_array = None if vectors is None else list(vectors[top])
+        columns = ([], [], []) if vectors is None else np.asarray(vectors).T
+        self.e_field_col1, self.e_field_col2, self.e_field_col3 = columns
+        self.e_field_col1_to_save, self.e_field_col2_to_save, self.e_field_col3_to_save = columns
+        self.position_max = polydata.GetPoint(self.Idmax)
+        self.cell_id_indexes_above_threshold, self.positions_above_threshold = (
+            self.GetIndexesAboveThreshold(threshold)
+        )
+        self.center_gravity_position = self.FindCenterofGravity(
+            self.cell_id_indexes_above_threshold, self.positions_above_threshold
+        )
+        self.visualizer.UpdateStaticEfieldTools()
+
+    def ClearStaticEfield(self):
+        if self.static_efield:
+            self.StopEfieldPainting()
+            self.static_efield = False
+            self.efield_mesh = None
+            self.max_efield_array = None
+            self.Id_list = []
+            self.e_field_norms_to_save = None
 
     def ShowEfieldintheintersection(self, intersectingCellIds, p1, coil_norm, coil_dir):
         closestDist = 100

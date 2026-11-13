@@ -4760,7 +4760,7 @@ class MarkersPanel(wx.Panel, ColumnSorterMixin):
         if label is None:
             label = self.GetNextMarkerLabel()
 
-        if self.nav_status and self.navigation.e_field_loaded:
+        if self.nav_status:
             Publisher.sendMessage("Get Cortex position")
 
         # XXX: Set marker type to 'coil target' if created during navigation, otherwise 'landmark'. This enables creating

@@ -1478,6 +1478,13 @@ class InnerTaskPanel(wx.Panel):
         ]
 
     def _on_efield_painted(self, painted, refused) -> None:
+        if not painted:
+            self._efield_loaded = False
+            self._efield_targets = []
+            self._retarget_on_new_surface = False
+            self.combo_surface.SetChecked([])
+            self.lbl_efield.SetLabel(_("No E-field loaded."))
+            return
         self._efield_loaded = True
         self._efield_targets = [name for _index, name, _coverage in painted]
 

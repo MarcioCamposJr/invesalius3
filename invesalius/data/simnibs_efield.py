@@ -260,6 +260,8 @@ class SimnibsEfieldVisualizer:
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         Publisher.subscribe(self.OnActor, "Send Actor")
         Publisher.subscribe(self.OnStaticMapRemoved, "Static surface map removed")
+        Publisher.subscribe(self.PublishStaticEfield, "Request static E-field")
+        Publisher.subscribe(self.OnLiveEfield, "Initialize E-field brain")
 
     def dispose(self):
         self.Remove()
@@ -343,6 +345,23 @@ class SimnibsEfieldVisualizer:
             self._Clear()
             self._TellCrossSections([])
             self.render()
+
+    def OnLiveEfield(self, e_field_brain, painting_token):
+        self.Remove()
+
+    def PublishStaticEfield(self):
+        if not self.targets:
+            return
+        target = self.targets[0]
+        vectors = self.source[2]
+        Publisher.sendMessage(
+            "Update static E-field",
+            polydata=target["display"],
+            values=target["values"],
+            point_ids=target["point_ids"],
+            vectors=None if vectors is None else np.asarray(vectors)[target["source_ids"]],
+            threshold=self.threshold,
+        )
 
     def _Paint(self, target_surfaces, choose=False):
         polydata, norms, _vectors = self.source
@@ -440,6 +459,8 @@ class SimnibsEfieldVisualizer:
         return None
 
     def _Show(self, painted):
+        if "E-field" in self.painting.tokens:
+            self.painting.stop("E-field")
         for target in painted:
             actor = target["actor"]
             prop = actor.GetProperty()
@@ -458,9 +479,13 @@ class SimnibsEfieldVisualizer:
             self.painting.clear_static_map(target["surface"])
 
     def _Clear(self):
+        had_source = self.source is not None
         self._RemoveArrows()
         self._Hide()
         self.source = None
+        if had_source:
+            Publisher.sendMessage("Clear static E-field")
+            self._PublishTargets()
 
     def _Stagger(self):
         """Fade the outer surfaces, as nested ones would otherwise hide the inner ones."""
@@ -503,6 +528,7 @@ class SimnibsEfieldVisualizer:
             self.painting.show_static_map(target["surface"], target["map"])
 
         self._ShowArrows()
+        self.PublishStaticEfield()
         self.render()
 
     def _Lut(self):
