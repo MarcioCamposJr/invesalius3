@@ -138,13 +138,16 @@ class SurfaceMap:
         else:
             raise TypeError("Unsupported surface lookup table.")
         table["nan_color"] = list(lut.GetNanColor())
+        color_bar = asdict(self.color_bar)
+        # A standalone snapshot needs its own scale, even if the live map shares one.
+        color_bar.pop("visible")
         return {
             "name": self.name,
             "unit": self.unit,
             "range": list(self.scalar_range),
             "color_array": self.color_array,
             "lookup_table": table,
-            "color_bar": asdict(self.color_bar),
+            "color_bar": color_bar,
         }
 
     @classmethod

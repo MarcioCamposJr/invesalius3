@@ -137,7 +137,7 @@ def SampleEfieldOntoSurface(
         return np.empty(0), [], np.empty(0, dtype=int), 0.0, float("inf")
 
     distances, indices = cKDTree(source_points).query(target_points, k=1)
-    within = distances <= max_distance
+    within = (distances <= max_distance) & np.isfinite(np.asarray(norms)[indices])
 
     source_ids = indices[within]
     values = np.asarray(norms, dtype=float)[source_ids]
@@ -277,6 +277,8 @@ class SimnibsEfieldVisualizer:
         max_distance=None,
     ):
         polydata, norms, vectors = ReadEfieldSurface(filepath)
+        if not np.any(np.isfinite(norms)):
+            raise ValueError("the E-field surface has no finite magnitude values")
 
         if colormap is not None:
             self.colormap = colormap
@@ -287,15 +289,14 @@ class SimnibsEfieldVisualizer:
         if max_distance is not None:
             self.max_distance = float(max_distance)
 
-        self.source = (polydata, norms, vectors)
         # Nothing chosen at load time means the best surface is picked here.
-        self._Paint(target_surfaces, choose=True)
+        self._Paint(target_surfaces, (polydata, norms, vectors), choose=True)
 
     def SetSurfaces(self, target_surfaces, max_distance=None):
         if max_distance is not None:
             self.max_distance = float(max_distance)
         if self.source is not None:
-            self._Paint(target_surfaces)
+            self._Paint(target_surfaces, self.source)
 
     def SetColormap(self, colormap):
         self.colormap = colormap
@@ -363,8 +364,9 @@ class SimnibsEfieldVisualizer:
             threshold=self.threshold,
         )
 
-    def _Paint(self, target_surfaces, choose=False):
-        polydata, norms, _vectors = self.source
+    def _Paint(self, target_surfaces, source, choose=False):
+        polydata, norms, _vectors = source
+        previous_surface = self.surface_actor
         painted, refused = self._Prepare(target_surfaces or [], polydata, norms)
         if not painted:
             if target_surfaces and self.targets:
@@ -377,7 +379,10 @@ class SimnibsEfieldVisualizer:
                 raise ValueError("the E-field surface could not be shown")
 
         self._Hide()
+        self.source = source
         self._Show(painted)
+        if previous_surface is not None and previous_surface is not self.surface_actor:
+            self._DropSurface(previous_surface)
         self._DropSurface()
         self._TellCrossSections([target["display"] for target in self.targets])
         self._PublishTargets(refused)
@@ -567,7 +572,13 @@ class SimnibsEfieldVisualizer:
             above = target["values"] > self.maximum * self.threshold
             rgb = numpy_support.vtk_to_numpy(colors)
             rgb[np.asarray(target["point_ids"])[above]] = _HIGHLIGHT_RGB
-        display.GetPointData().SetScalars(colors)
+        point_data = display.GetPointData()
+        point_data.AddArray(colors)
+        values = np.full(display.GetNumberOfPoints(), np.nan)
+        values[target["point_ids"]] = target["values"]
+        scalars = numpy_support.numpy_to_vtk(values, deep=True)
+        scalars.SetName("magnE")
+        point_data.SetScalars(scalars)
         display.Modified()
 
     def _ShowArrows(self):
@@ -665,12 +676,14 @@ class SimnibsEfieldVisualizer:
         wx.CallAfter(Publisher.sendMessage, "Repopulate surfaces")
         return surface_index
 
-    def _DropSurface(self):
-        actor = self.surface_actor
+    def _DropSurface(self, actor=None):
+        if actor is None:
+            actor = self.surface_actor
         if actor is None or any(t["actor"] is actor for t in self.targets):
             return
 
-        self.surface_actor = None
+        if actor is self.surface_actor:
+            self.surface_actor = None
         surface_index = self._SurfaceIndexFromActor(actor)
         if surface_index is None:
             return

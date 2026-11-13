@@ -1699,16 +1699,21 @@ class SurfacesListCtrlPanel(InvListCtrl):
         surface = Project().surface_dict[global_surface_id]
         painting = SurfacePainting()
         modes = painting.available_modes(surface)
-        if modes:
+        static_map = painting.static_maps.get(surface)
+        if modes or static_map is not None:
             modes_menu = wx.Menu()
             for name, label in [("", _("Original"))] + [(mode.name, mode.name) for mode in modes]:
                 item = modes_menu.AppendRadioItem(wx.ID_ANY, label)
-                item.Check(surface.painting_mode == name)
+                item.Check(static_map is None and surface.painting_mode == name)
                 modes_menu.Bind(
                     wx.EVT_MENU,
                     lambda evt, name=name: painting.select(surface, name),
                     item,
                 )
+            if static_map is not None:
+                item = modes_menu.AppendRadioItem(wx.ID_ANY, static_map.name)
+                item.Check(True)
+                item.Enable(False)
             surface_context_menu.AppendSubMenu(modes_menu, _("Color map mode"))
         if ses.Session().GetConfig("mode") == const.MODE_NAVIGATOR:
             peeling = painting.peeling

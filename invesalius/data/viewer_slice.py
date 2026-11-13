@@ -1943,6 +1943,9 @@ class Viewer(wx.Panel):
                 mapper = vtkPolyDataMapper()
                 mapper.SetInputConnection(cutter.GetOutputPort())
                 mapper.ScalarVisibilityOn()
+                mapper.SetScalarModeToUsePointFieldData()
+                mapper.SelectColorArray(simnibs_efield.COLORS_ARRAY_NAME)
+                mapper.SetColorModeToDirectScalars()
 
                 actor = vtkActor()
                 actor.SetMapper(mapper)
