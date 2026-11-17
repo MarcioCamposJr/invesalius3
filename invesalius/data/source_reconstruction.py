@@ -36,7 +36,7 @@ import nibabel as nib
 import numpy as np
 from scipy.io import loadmat
 from scipy.sparse import csc_matrix, csr_matrix, issparse
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
 from invesalius.data.time_series import TimeAxis
@@ -184,6 +184,92 @@ class CorticalSourceSeries:
                 return source.values[:, source_index]
             source_index -= len(source.vertices)
         raise IndexError("Source index is outside the source series.")
+
+    @property
+    def source_vertices(self):
+        offsets = (0, *np.cumsum(self.hemisphere_sizes))
+        return np.concatenate(
+            [source.vertices + offset for source, offset in zip(self.sources, offsets)]
+        ).astype(np.int64)
+
+    def anatomical_points(self):
+        """Use matching white-matter anatomy while preserving cortical vertex IDs."""
+        if self.base_representation == "inflated":
+            raise ValueError("An anatomical source surface is required to place tract seeds.")
+        points = self.points
+        if "white" in self.representations:
+            white, _, mapping, _ = self.read_surface("white")
+            if (
+                not issparse(mapping)
+                and len(white) == len(points)
+                and np.array_equal(mapping, self.vertex_sources)
+            ):
+                points = white
+        return points
+
+    def activation_strength(self, values):
+        """Normalize magnitudes through Min, Med and Max to a bounded activation."""
+        lower, upper = self.color_range
+        minimum, middle, maximum = self.color_limits or (lower, upper / 2, upper)
+        margin = (maximum - minimum) * 1e-5
+        middle = np.clip(middle, minimum + margin, maximum - margin)
+        values = np.abs(values, dtype=np.float64)
+        strength = np.interp(values, (minimum, middle, maximum), (0.0, 0.5, 1.0))
+        strength[~np.isfinite(values)] = 0.0
+        return strength
+
+    def detect_regions(self, values, radius):
+        """Find connected smoothed regions above Min with a peak reaching Med."""
+        if not np.isfinite(radius) or radius <= 0:
+            raise ValueError("A positive, finite search radius is required.")
+        values = np.abs(values, dtype=np.float64)
+        if values.shape != (len(self.points),):
+            raise ValueError("Smoothed activity must match the anatomical cortical vertices.")
+        strength = self.activation_strength(values)
+        active = strength > 0
+        faces = self.triangles
+        edges = np.concatenate((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
+        hemispheres = self.read_surface(self.base_representation)[3]
+        if hemispheres is not None:
+            edges = edges[hemispheres[edges[:, 0]] == hemispheres[edges[:, 1]]]
+        edges = edges[active[edges].all(axis=1)]
+        graph = csr_matrix(
+            (np.ones(len(edges)), (edges[:, 0], edges[:, 1])),
+            shape=(len(values), len(values)),
+        )
+        _, labels = connected_components(graph, directed=False)
+        candidates = np.flatnonzero((strength >= 0.5) & (self.vertex_sources >= 0))
+        candidates = candidates[np.argsort(-values[candidates], kind="stable")]
+        points = self.anatomical_points()
+        vertices = np.flatnonzero(active)
+        vertices = vertices[np.argsort(labels[vertices], kind="stable")]
+        groups = np.split(vertices, np.flatnonzero(np.diff(labels[vertices])) + 1)
+        members = {labels[group[0]]: group for group in groups if len(group)}
+        regions, seen = [], set()
+        for vertex in candidates:
+            label = labels[vertex]
+            if label in seen:
+                continue
+            seen.add(label)
+            vertices = members[label]
+            coordinates = points[vertices]
+            tree = cKDTree(coordinates)
+            covered = np.zeros(len(vertices), dtype=bool)
+            selected = []
+            for local in np.argsort(-values[vertices], kind="stable"):
+                if covered[local]:
+                    continue
+                selected.append(local)
+                covered[tree.query_ball_point(coordinates[local], radius)] = True
+            regions.append(
+                (int(self.vertex_sources[vertex]), coordinates[selected].copy(), vertices)
+            )
+        if len(regions) < 2:
+            raise ValueError(
+                "Fewer than two separate active regions were found. "
+                "Review the current time, Min/Med color limits and search radius."
+            )
+        return regions
 
     def source_label(self, source_index):
         for index, source in enumerate(self.sources):
