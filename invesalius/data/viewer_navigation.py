@@ -490,7 +490,10 @@ class NavigationView:
             self.time_series.set_display(
                 mode.series.display_scale[0], mode.series.display_title, mode.series.measure
             )
-            self.time_series.set_source(mode.source_values, mode.source_label)
+            sources = mode.connection.traces or (
+                ((mode.source_label, mode.source_values),) if mode.source_values is not None else ()
+            )
+            self.time_series.set_sources(sources)
             self.time_series.sync()
         else:
             playback = self.time_series.playback

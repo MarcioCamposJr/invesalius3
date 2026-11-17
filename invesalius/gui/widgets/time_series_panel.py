@@ -70,14 +70,13 @@ class TimeSeriesPanel(wx.Panel):
         self._dataset_index = wx.NOT_FOUND
         self._dragging = False
         self._collapsed = False
-        self._source_values = None
-        self._source_plot = None
+        self._sources = ()
+        self._source_plots = []
         self._zero_plot = None
         self._values = None
         self._display = None
         self._display_factor = 1.0
         self._measure = "amplitude"
-        self._source_label = ""
         self.body = body = wx.Panel(self)
         for window in (self, body):
             window.SetBackgroundColour(wx.BLACK)
@@ -330,27 +329,38 @@ class TimeSeriesPanel(wx.Panel):
         cursor.SetValue(1, limit)
         cursor.Modified()
         self.cursor_table.Modified()
-        if self._source_values is not None:
-            source = self._source_values
-            self._source_values = None
-            self.set_source(source, self._source_label)
+        if self._sources:
+            sources = self._sources
+            self._sources = ()
+            self.set_sources(sources)
         self.chart.RecalculateBounds()
 
-    def set_source(self, values, label):
-        if self.playback is None or values is self._source_values:
+    def set_sources(self, sources):
+        """Plot the selected source, or the two A–B signals, beside global RMS."""
+        if len(sources) > 2:
+            raise ValueError("The timeline supports at most two selected source signals.")
+        if self.playback is None or (
+            len(sources) == len(self._sources)
+            and all(
+                name == old_name and values is old_values
+                for (name, values), (old_name, old_values) in zip(sources, self._sources)
+            )
+        ):
             return
-        for plot in (self._source_plot, self._zero_plot):
+        for plot in (*self._source_plots, self._zero_plot):
             if plot is not None:
                 self.chart.RemovePlotInstance(plot)
-        self._source_plot = self._zero_plot = None
-        self._source_values = values
-        self._source_label = label
+        self._source_plots = []
+        self._zero_plot = None
+        self._sources = sources
         axis = self.chart.GetAxis(vtkAxis.RIGHT)
-        axis.SetVisible(values is not None)
-        if values is not None:
-            displayed = np.asarray(values, dtype=np.float64) * self._display_factor
-            low = min(0.0, float(np.min(displayed)))
-            high = max(0.0, float(np.max(displayed)))
+        axis.SetVisible(bool(sources))
+        if sources:
+            displayed = [
+                np.asarray(values, dtype=np.float64) * self._display_factor for _, values in sources
+            ]
+            low = min(0.0, *(float(np.min(values)) for values in displayed))
+            high = max(0.0, *(float(np.max(values)) for values in displayed))
             margin = (high - low) * 0.1 or 1.0
             low, high = low - margin, high + margin
             axis.SetTitle(_("Power") if self._measure == "power" else _("Amplitude"))
@@ -369,23 +379,26 @@ class TimeSeriesPanel(wx.Panel):
             self._zero_plot.SetColor(110, 110, 110, 180)
             self._zero_plot.SetWidth(1.0)
             self._zero_plot.GetPen().SetLineType(vtkPen.DOT_LINE)
-            table = vtkTable()
-            table.AddColumn(self.table.GetColumn(0))
-            # STC values are big-endian; VTK needs native-endian values.
-            column = numpy_to_vtk(displayed, deep=True)
-            column.SetName("Source")
-            table.AddColumn(column)
-            self._source_plot = self.chart.AddPlot(vtkChart.LINE)
-            self._source_plot.SetInputData(table, 0, 1)
-            self.chart.SetPlotCorner(self._source_plot, 1)
-            self._source_plot.SetColor(170, 205, 145, 255)
-            self._source_plot.SetWidth(1.5)
+            for (name, _values), values in zip(sources, displayed):
+                color = (230, 130, 245, 255) if name.startswith("B:") else (170, 205, 145, 255)
+                table = vtkTable()
+                table.AddColumn(self.table.GetColumn(0))
+                # STC values are big-endian; VTK needs native-endian values.
+                column = numpy_to_vtk(values, deep=True)
+                column.SetName("Source")
+                table.AddColumn(column)
+                plot = self.chart.AddPlot(vtkChart.LINE)
+                plot.SetInputData(table, 0, 1)
+                self.chart.SetPlotCorner(plot, 1)
+                plot.SetColor(*color)
+                plot.SetWidth(1.5)
+                self._source_plots.append(plot)
             # Apply the full range after adding plots so their transforms use these bounds.
             axis.SetBehavior(vtkAxis.FIXED)
             axis.SetRange(low, high)
             axis.SetPrecision(max(0, 2 - floor(log10(high - low))))
             self.chart.RecalculateBounds()
-            self.source_label.SetLabel(_("RMS") + " + " + label)
+            self.source_label.SetLabel(_("RMS") + " + " + " + ".join(name for name, _ in sources))
             self.source_label.SetForegroundColour(wx.Colour(170, 205, 145))
         else:
             self.source_label.SetLabel(_("Global RMS"))
@@ -432,17 +445,17 @@ class TimeSeriesPanel(wx.Panel):
         self._dataset_index = wx.NOT_FOUND
         self.dataset.Clear()
         self.dataset.Enable(False)
-        self._source_values = None
+        self._sources = ()
         self._values = None
         self._display = None
         self._display_factor = 1.0
         self._measure = "amplitude"
-        self._source_label = ""
         self.scale_label.SetInput("")
-        for plot in (self._source_plot, self._zero_plot):
+        for plot in (*self._source_plots, self._zero_plot):
             if plot is not None:
                 self.chart.RemovePlotInstance(plot)
-        self._source_plot = self._zero_plot = None
+        self._source_plots = []
+        self._zero_plot = None
         self.chart.GetAxis(vtkAxis.RIGHT).SetVisible(False)
         self.source_label.SetLabel(_("Global RMS"))
         self.source_label.SetForegroundColour(wx.Colour(178, 178, 178))

@@ -159,6 +159,76 @@ class TaskPanel(wx.Panel):
             self.color_values.append(value)
         colors.Add(color_grid, 0, wx.EXPAND | wx.ALL, 5)
         sizer.Add(colors, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 7)
+        connection_box = wx.StaticBoxSizer(
+            wx.VERTICAL, self, _("Source connection A–B (experimental)")
+        )
+        seed_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.seed_a = wx.Button(self, label=_("Set A"))
+        self.seed_b = wx.Button(self, label=_("Set B"))
+        for button in (self.seed_a, self.seed_b):
+            button.SetToolTip(_("Use the cortical source selected by the cross cursor."))
+            button.Bind(wx.EVT_BUTTON, self.OnConnection)
+            seed_row.Add(button, 0, wx.RIGHT, 5)
+        self.toggle_points = wx.Button(self, label=_("Hide points"))
+        self.toggle_points.SetToolTip(
+            _("Show or hide seed points without changing the tract search.")
+        )
+        self.toggle_points.Bind(wx.EVT_BUTTON, self.OnConnection)
+        seed_row.Add(self.toggle_points, 0)
+        connection_box.Add(seed_row, 0, wx.EXPAND | wx.ALL, 5)
+        self.connection_status = wx.StaticText(self, label="A: —   B: —\n")
+        connection_box.Add(self.connection_status, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
+        automatic_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.detect_connection = wx.Button(self, label=_("Detect points"))
+        self.detect_connection.SetToolTip(
+            _(
+                "Detect all smoothed regions above Min, with peaks reaching Med. Larger regions receive more seed points."
+            )
+        )
+        self.detect_connection.Bind(wx.EVT_BUTTON, self.OnConnection)
+        automatic_row.Add(self.detect_connection, 0, wx.RIGHT, 5)
+        self.connection_pair = wx.Choice(self)
+        self.connection_pair.SetName(_("Source pair"))
+        self.connection_pair.SetToolTip(
+            _("Select the pair whose A and B signals appear in the graph.")
+        )
+        self.connection_pair.Bind(wx.EVT_CHOICE, self.OnConnection)
+        automatic_row.Add(self.connection_pair, 1, wx.EXPAND)
+        connection_box.Add(automatic_row, 0, wx.EXPAND | wx.ALL, 5)
+        connection_row = wx.BoxSizer(wx.HORIZONTAL)
+        connection_row.Add(
+            wx.StaticText(self, label=_("Search radius (mm):")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.connection_radius = wx.SpinCtrlDouble(self, min=0.5, max=20, initial=1.5, inc=0.5)
+        self.connection_radius.SetToolTip(
+            _("Set the seed-sphere radius and spacing between distributed points in each region.")
+        )
+        connection_row.Add(self.connection_radius, 1, wx.RIGHT, 5)
+        self.find_connection = wx.Button(self, label=_("Find tracts"))
+        self.find_connection.SetToolTip(
+            _(
+                "Use Number tracts from Tractography for each region pair, searching for up to 45 seconds per pair in parallel batches."
+            )
+        )
+        self.clear_connection = wx.Button(self, label=_("Clear"))
+        for button in (self.find_connection, self.clear_connection):
+            button.Bind(wx.EVT_BUTTON, self.OnConnection)
+            connection_row.Add(button, 0, wx.RIGHT, 5)
+        connection_box.Add(connection_row, 0, wx.EXPAND | wx.ALL, 5)
+        hint = wx.StaticText(
+            self,
+            label=_(
+                "Detect points uses smoothed activity: Min defines region boundaries, Med selects strong peaks, and Max sets saturation. "
+                "Detect again after changing the time, color limits or radius. Load FOD in Tractography; "
+                "each pair's activity controls its tract opacity."
+            ),
+        )
+        hint.Wrap(360)
+        connection_box.Add(hint, 0, wx.EXPAND | wx.ALL, 5)
+        sizer.Add(connection_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 7)
         self.SetSizerAndFit(sizer)
         self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
         Publisher.subscribe(self.OnSourceChanged, "Source reconstruction changed")
@@ -233,6 +303,97 @@ class TaskPanel(wx.Panel):
             text = f"{value * factor:.4g}" if loaded else "-"
             if label.GetLabel() != text:
                 label.SetLabel(text)
+        connection = mode.connection if loaded else None
+        self.toggle_points.Enable(bool(active and connection.markers))
+        points_label = (
+            _("Hide points") if not loaded or connection.show_points else _("Show points")
+        )
+        if self.toggle_points.GetLabel() != points_label:
+            self.toggle_points.SetLabel(points_label)
+        self.detect_connection.Enable(bool(active))
+        for button in (self.seed_a, self.seed_b):
+            button.Enable(bool(active and mode.selected_source is not None))
+        self.find_connection.Enable(
+            bool(active and all(seed is not None for seed in connection.seeds))
+        )
+        self.clear_connection.Enable(
+            bool(loaded and any(seed is not None for seed in connection.seeds))
+        )
+        self.connection_radius.Enable(loaded)
+        choices = []
+        if loaded and all(seed is not None for seed in connection.seeds):
+            for pair in connection.pairs:
+                label = " / ".join(
+                    f"{i + 1}: {series.source_label(connection.seeds[i][0])}" for i in pair
+                )
+                if pair in connection.counts:
+                    label += f" ({connection.counts[pair]} " + _("tracts") + ")"
+                choices.append(label)
+        if self.connection_pair.GetItems() != choices:
+            self.connection_pair.SetItems(choices)
+        self.connection_pair.Enable(bool(active and choices))
+        selected = connection.pair_index if choices else wx.NOT_FOUND
+        if self.connection_pair.GetSelection() != selected:
+            self.connection_pair.SetSelection(selected)
+        pair = connection.pairs[connection.pair_index] if loaded else (0, 1)
+        labels = [
+            f"{name}: {series.source_label(seed[0]) if seed is not None else '—'}"
+            for name, seed in zip(
+                ("A", "B"), (connection.seeds[i] for i in pair) if loaded else (None, None)
+            )
+        ]
+        text = "   ".join(labels)
+        if loaded and all(seed is not None for seed in connection.seeds):
+            text += (
+                f"\n{len(connection.seeds)} "
+                + _("regions")
+                + f", {sum(len(seed[1]) for seed in connection.seeds)} "
+                + _("points")
+                + f"\n{len(connection.actors)}/{len(connection.pairs)} "
+                + _("pairs")
+                + f", {connection.count} "
+                + _("tracts")
+            )
+        elif loaded and connection.count:
+            text += f"\n{connection.count} " + _("tracts")
+        else:
+            text += "\n"
+        if self.connection_status.GetLabel() != text:
+            self.connection_status.SetLabel(text)
+            self.Layout()
+
+    def OnConnection(self, event):
+        if self._mode is None or self._mode.series is None:
+            return
+        try:
+            control = event.GetEventObject()
+            if control is self.toggle_points:
+                self._mode.connection.show_points = not self._mode.connection.show_points
+                Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
+                Publisher.sendMessage("Render volume viewer")
+            elif control is self.detect_connection:
+                self._mode.connection.detect_seeds(self.connection_radius.GetValue())
+            elif control is self.connection_pair:
+                self._mode.connection.select_pair(self.connection_pair.GetSelection())
+            elif control is self.find_connection:
+                Publisher.sendMessage(
+                    "Compute source tract connection",
+                    mode=self._mode,
+                    radius=self.connection_radius.GetValue(),
+                )
+            elif control is self.clear_connection:
+                self._mode.connection.clear()
+                Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
+                Publisher.sendMessage("Render volume viewer")
+            else:
+                self._mode.connection.set_seed(0 if control is self.seed_a else 1)
+        except Exception as error:
+            with dlg.ErrorMessageBox(
+                wx.GetApp().GetTopWindow(), _("Error creating source connection"), str(error)
+            ) as dialog:
+                dialog.ShowModal()
+        finally:
+            self._sync_display_controls()
 
     def OnColorLimitsChanged(self, event):
         if self._mode is None or self._mode.series is None:

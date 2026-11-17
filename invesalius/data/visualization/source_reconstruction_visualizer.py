@@ -42,6 +42,7 @@ from invesalius.data.source_reconstruction import (
     source_smoothing,
 )
 from invesalius.data.time_series import Playback
+from invesalius.data.visualization.source_tract_visualizer import SourceTractConnection
 from invesalius.data.visualization.surface_map_visualizer import ColorBar, SurfaceMap
 from invesalius.data.visualization.surface_painting_visualizer import SurfacePainting
 from invesalius.project import Project
@@ -78,6 +79,7 @@ class SourceReconstructionMode:
         self._source_locator = None
         self._cross_enabled = False
         self.available = False
+        self.connection = SourceTractConnection(self)
         self.painting.register(self)
         self.__bind_events()
 
@@ -239,12 +241,8 @@ class SourceReconstructionMode:
             surface_points[hemispheres == 1, 0] += shift
         n_sources = sum(len(source.vertices) for source in series.sources)
         if not issparse(source_mapping) and n_sources < len(surface_points):
-            offsets = (0, *np.cumsum(series.hemisphere_sizes))
-            source_vertices = np.concatenate(
-                [source.vertices + offset for source, offset in zip(series.sources, offsets)]
-            )
             source_mapping = source_smoothing(
-                triangles, source_vertices, len(surface_points), hemispheres
+                triangles, series.source_vertices, len(surface_points), hemispheres
             )
         points = vtkPoints()
         points.SetData(numpy_to_vtk(surface_points, deep=True))
@@ -565,19 +563,26 @@ class SourceReconstructionMode:
             self._show_frame()
         return frame_index
 
-    def _show_frame(self):
-        frame = self.series.read_frame(self.playback.index)
-        scalars = self.surface_map.polydata.GetPointData().GetScalars()
-        values = vtk_to_numpy(scalars)
-        mapping = self._representation_data[self.representation][0]
-        factor = self.series.display_scale[0]
+    def read_surface_frame(self, frame_index, representation):
+        """Share the displayed spatial interpolation with source-region detection."""
+        frame = self.series.read_frame(frame_index)
+        mapping = self._representation_data[representation][0]
+        values = np.full(mapping.shape[0] if issparse(mapping) else len(mapping), np.nan)
         if issparse(mapping):
-            values[:] = (mapping @ frame) * factor
+            values[:] = mapping @ frame
             values[np.diff(mapping.indptr) == 0] = np.nan
         else:
             mapped = mapping >= 0
-            values.fill(np.nan)
-            values[mapped] = np.multiply(frame[mapping[mapped]], factor, dtype=np.float64)
+            values[mapped] = frame[mapping[mapped]]
+        return values
+
+    def _show_frame(self):
+        scalars = self.surface_map.polydata.GetPointData().GetScalars()
+        values = vtk_to_numpy(scalars)
+        values[:] = (
+            self.read_surface_frame(self.playback.index, self.representation)
+            * self.series.display_scale[0]
+        )
         scalars.Modified()
         self._update_map_colors(self.surface_map, self.series)
         self.frame_index = self.playback.index

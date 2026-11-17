@@ -19,6 +19,7 @@
 
 import time
 from functools import partial
+from threading import Event
 
 import nibabel as nb
 import numpy as np
@@ -54,7 +55,6 @@ import wx.lib.masked.numctrl
 import invesalius.constants as const
 import invesalius.data.slice_ as sl
 import invesalius.data.tractography as dti
-import invesalius.data.vtk_utils as vtk_utils
 import invesalius.gui.dialogs as dlg
 import invesalius.utils as utils
 from invesalius.i18n import tr as _
@@ -86,6 +86,9 @@ class InnerTaskPanel(wx.Panel):
         self.affine = np.identity(4)
         self.affine_vtk = None
         self.trekker = None
+        self.fod_filename = None
+        self._connection_running = False
+        self.n_threads = 1
         self.n_tracts = const.N_TRACTS
         self.view_tracts = False
         self.seed_offset = const.SEED_OFFSET
@@ -233,6 +236,73 @@ class InnerTaskPanel(wx.Panel):
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         Publisher.subscribe(self.OnUpdateTracts, "Set cross focal point")
         Publisher.subscribe(self.UpdateNavigationStatus, "Navigation status")
+        Publisher.subscribe(self.OnSourceConnection, "Compute source tract connection")
+
+    def OnSourceConnection(self, mode, radius):
+        if self.trekker is None or self.fod_filename is None:
+            raise ValueError(_("Load a FOD image in Tractography first."))
+        if self.nav_status or self._connection_running:
+            raise ValueError(
+                _("Stop navigation before computing an experimental source connection.")
+            )
+        connection = mode.connection
+        if not mode.display_active or any(seed is None for seed in connection.seeds):
+            raise ValueError(_("Select A and B or detect active source regions first."))
+        regions = [seed[1] for seed in connection.seeds]
+        seeds = np.vstack(regions)
+        if len(regions) == 2 and all(len(seed[2]) == 1 for seed in connection.seeds):
+            dti.clip_between_seeds(seeds, seeds, radius)
+        fod = nb.load(self.fod_filename)
+        if not np.isfinite(fod.affine).all() or np.linalg.matrix_rank(fod.affine) != 4:
+            raise ValueError(_("The FOD image has invalid world coordinates."))
+        voxels = nb.affines.apply_affine(np.linalg.inv(fod.affine), seeds)
+        if np.any(voxels < -0.5) or np.any(voxels > np.asarray(fod.shape[:3]) - 0.5):
+            raise ValueError(_("The seeds are outside the FOD. Check anatomical/FOD registration."))
+        if mode.representation == "inflated":
+            mode.set_display(mode.series.base_representation, True, True)
+        mode.playback.pause()
+        revision = connection.revision
+        cancel = Event()
+        self._connection_running = True
+        try:
+            with (
+                wx.ProgressDialog(
+                    _("Source connection A–B (experimental)"),
+                    _(
+                        "Finding tracts between source regions in native parallel batches. Search budget: 45 seconds per active pair.\nCancellation takes effect after the current batch finishes."
+                    ),
+                    parent=wx.GetApp().GetTopWindow(),
+                    style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
+                ) as dialog,
+                ThreadPoolExecutor(max_workers=1) as executor,
+            ):
+                future = executor.submit(
+                    dti.compute_source_connection,
+                    self.trekker,
+                    regions,
+                    radius,
+                    self.n_tracts,
+                    cancel,
+                    self.n_threads,
+                )
+                while not future.done():
+                    keep_going, _skip = dialog.Pulse()
+                    if not keep_going:
+                        cancel.set()
+                    try:
+                        future.result(timeout=0.05)
+                    except TimeoutError:
+                        pass
+                tracks = future.result()
+            if not cancel.is_set():
+                connection.set_tracks(tracks, revision)
+                if connection.actors:
+                    self.view_tracts = False
+                    self.checktracts.SetValue(False)
+                    Publisher.sendMessage("Update tracts visualization", data=False)
+                    Publisher.sendMessage("Remove tracts")
+        finally:
+            self._connection_running = False
 
     def OnSelectNumTracts(self, evt, ctrl):
         self.n_tracts = ctrl.GetValue()
@@ -293,6 +363,7 @@ class InnerTaskPanel(wx.Panel):
                 self.tp = dlg.TractographyProgressWindow(msg)
 
                 self.trekker = None
+                self.fod_filename = filename
                 file = filename.encode("utf-8")
                 with ThreadPoolExecutor(max_workers=multiprocessing.cpu_count()) as exec:
                     futures = [
@@ -327,6 +398,7 @@ class InnerTaskPanel(wx.Panel):
         if trekker is not None:
             self.trekker = trekker.result()
             self.trekker, n_threads = dti.set_trekker_parameters(self.trekker, self.trekker_cfg)
+            self.n_threads = n_threads
 
             self.checktracts.Enable(True)
             self.checktracts.SetValue(True)
@@ -420,6 +492,7 @@ class InnerTaskPanel(wx.Panel):
                     self.trekker, n_threads = dti.set_trekker_parameters(
                         self.trekker, self.trekker_cfg
                     )
+                    self.n_threads = n_threads
                     Publisher.sendMessage("Update Trekker object", data=self.trekker)
                     Publisher.sendMessage("Update number of threads", data=n_threads)
 
@@ -452,7 +525,9 @@ class InnerTaskPanel(wx.Panel):
             )
 
     def OnCloseProject(self):
+        self.fod_filename = None
         self.trekker = None
+        self.n_threads = 1
         self.trekker_cfg = const.TREKKER_CONFIG
 
         self.checktracts.SetValue(False)
