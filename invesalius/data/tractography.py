@@ -24,8 +24,10 @@
 import queue
 import threading
 import time
+from itertools import combinations
 
 import numpy as np
+from scipy.spatial import cKDTree
 from vtkmodules.vtkCommonCore import vtkPoints, vtkUnsignedCharArray
 from vtkmodules.vtkCommonDataModel import (
     vtkCellArray,
@@ -52,6 +54,166 @@ def prepare_seed_coordinates(seed_coordinates):
     if not np.all(np.isfinite(seed_coordinates)):
         return None
     return np.ascontiguousarray(seed_coordinates)
+
+
+def clip_region_pairs(points, tree, region_ids, radius):
+    """Clip streamlines between unions of seed spheres, excluding ambiguous overlaps."""
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 2 or not np.isfinite(points).all():
+        return {}
+    points = points[np.r_[True, np.any(np.diff(points, axis=0) != 0, axis=1)]]
+    if len(points) < 2:
+        return {}
+    vectors = np.diff(points, axis=0)
+    lengths = np.einsum("ij,ij->i", vectors, vectors)
+    bounds = np.nextafter(radius + np.sqrt(lengths) / 2, np.inf)
+    neighbors = tree.query_ball_point(points[:-1] + vectors / 2, bounds)
+    counts = np.fromiter((len(indices) for indices in neighbors), dtype=int)
+    if not counts.any():
+        return {}
+    segments = np.repeat(np.arange(len(vectors)), counts)
+    centers = np.concatenate(neighbors).astype(np.int64)
+    relative = points[segments] - tree.data[centers]
+    a = lengths[segments]
+    b = np.einsum("ij,ij->i", vectors[segments], relative)
+    c = np.einsum("ij,ij->i", relative, relative) - radius**2
+    discriminant = b**2 - a * c
+    root = np.sqrt(np.maximum(discriminant, 0))
+    entry = np.maximum(0, (-b - root) / a)
+    exit_ = np.minimum(1, (-b + root) / a)
+    valid = (discriminant >= 0) & (entry <= exit_)
+    entries = segments[valid] + entry[valid]
+    exits = segments[valid] + exit_[valid]
+    labels = region_ids[centers[valid]]
+    crossings = {}
+    for index in np.lexsort((entries, labels)):
+        intervals = crossings.setdefault(int(labels[index]), [])
+        start, end = entries[index], exits[index]
+        if intervals and start <= intervals[-1][1]:
+            intervals[-1][1] = max(intervals[-1][1], end)
+        else:
+            intervals.append([start, end])
+    clips = {}
+    positions = np.arange(len(points))
+    for pair in combinations(sorted(crossings), 2):
+        for origin, target in (pair, pair[::-1]):
+            starts = np.asarray(crossings[origin])
+            for end, _exit in crossings[target]:
+                previous = np.searchsorted(starts[:, 0], end, side="right") - 1
+                if previous < 0:
+                    continue
+                start = starts[previous, 1]
+                if start >= end:
+                    continue
+                endpoints = []
+                for value in (start, end):
+                    index = min(int(value), len(points) - 2)
+                    endpoints.append(points[index] + (value - index) * vectors[index])
+                segment = np.vstack(
+                    (endpoints[0], points[(positions > start) & (positions < end)], endpoints[1])
+                )
+                clips[pair] = segment if origin == pair[0] else segment[::-1].copy()
+                break
+            if pair in clips:
+                break
+    return clips
+
+
+def clip_between_seeds(points, seeds, radius):
+    """Return the streamline segment between two nonoverlapping seed spheres."""
+    seeds = prepare_seed_coordinates(seeds)
+    if seeds is None or seeds.shape != (2, 3) or not np.isfinite(radius) or radius <= 0:
+        raise ValueError("Two finite seed centers and a positive radius are required.")
+    if np.linalg.norm(seeds[0] - seeds[1]) <= 2 * radius:
+        raise ValueError("The seed regions must not overlap.")
+    return clip_region_pairs(points, cKDTree(seeds), np.arange(2), radius).get((0, 1))
+
+
+def compute_source_connection(trekker, regions, radius, count, cancel, n_threads):
+    """Track region pairs in native parallel batches, allowing 45 seconds per active pair."""
+    regions = [prepare_seed_coordinates(np.atleast_2d(region)) for region in regions]
+    if (
+        len(regions) < 2
+        or any(region is None for region in regions)
+        or not np.isfinite(radius)
+        or radius <= 0
+        or not 1 <= count <= 2000
+        or n_threads < 1
+    ):
+        raise ValueError(
+            "Select at least two valid seed regions, a positive radius and 1 to 2000 tracts per pair."
+        )
+    tracks = {pair: [] for pair in combinations(range(len(regions)), 2)}
+    centers = np.vstack(regions)
+    region_ids = np.repeat(np.arange(len(regions)), [len(region) for region in regions])
+    tree = cKDTree(centers)
+    rng = np.random.default_rng()
+    cursors = np.zeros(len(regions), dtype=int)
+    sampled = generated = 0
+    queue = iter(tracks)
+    active = {}
+    parallel_pairs = max(1, n_threads // 2)
+    batch_size = max(32, n_threads)
+    # Trekker 0.9 has process-global state; its native threads safely track seeds from several pairs.
+    while not cancel.is_set():
+        now = time.monotonic()
+        active = {
+            pair: deadline
+            for pair, deadline in active.items()
+            if len(tracks[pair]) < count and now < deadline
+        }
+        while len(active) < parallel_pairs:
+            pair = next(queue, None)
+            if pair is None:
+                break
+            if len(tracks[pair]) < count:
+                active[pair] = now + 45
+        if not active:
+            break
+        samples = []
+        per_pair = max(2, batch_size // len(active))
+        for pair in active:
+            first, second = (len(regions[i]) for i in pair)
+            first_count = 1 + round((per_pair - 2) * first / (first + second))
+            for origin, size in zip(pair, (first_count, per_pair - first_count)):
+                indices = (cursors[origin] + np.arange(size)) % len(regions[origin])
+                cursors[origin] += size
+                offsets = rng.normal(size=(size, 3))
+                offsets /= np.linalg.norm(offsets, axis=1)[:, None]
+                offsets *= radius * rng.random((size, 1)) ** (1 / 3)
+                samples.append(regions[origin][indices] + offsets)
+        samples = np.ascontiguousarray(np.vstack(samples))
+        sampled += len(samples)
+        trekker.seed_coordinates(samples)
+        for track in trekker.run():
+            path = np.asarray(track, dtype=float).T
+            if path.ndim != 2 or path.shape[1] != 3 or len(path) < 2 or not np.isfinite(path).all():
+                continue
+            generated += 1
+            for pair, segment in clip_region_pairs(path, tree, region_ids, radius).items():
+                if len(tracks[pair]) < count:
+                    tracks[pair].append(segment)
+    if cancel.is_set():
+        return {}
+    if not any(tracks.values()):
+        summary = (
+            f"Regions: {len(regions)}. Distributed points: {len(centers)}. "
+            f"Positions sampled: {sampled}. Valid streamlines returned: {generated}. "
+            f"Search radius: {radius:g} mm."
+        )
+        if not generated:
+            raise ValueError(
+                "Trekker did not generate any valid streamline from the seed regions. "
+                + summary
+                + " Check FOD/MRI registration, white-matter seed placement and ACT/tracking settings."
+            )
+        raise ValueError(
+            "Streamlines were generated, but none connected two seed regions without overlap. "
+            + summary
+            + " Check anatomical alignment, region locations and radius. "
+            "Each active pair is searched for up to 45 seconds, stopping between batches."
+        )
+    return tracks
 
 
 def compute_directions(trk_n, alpha=255):
