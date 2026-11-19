@@ -182,12 +182,13 @@ class TaskPanel(wx.Panel):
         self.detect_connection = wx.Button(self, label=_("Detect points"))
         self.detect_connection.SetToolTip(
             _(
-                "Detect all smoothed regions above Min, with peaks reaching Med. Larger regions receive more seed points."
+                "Group active areas above Min by cortical atlas parcel, with a peak reaching Med. Without an atlas, use connected patches."
             )
         )
         self.detect_connection.Bind(wx.EVT_BUTTON, self.OnConnection)
         automatic_row.Add(self.detect_connection, 0, wx.RIGHT, 5)
         self.connection_pair = wx.Choice(self)
+        self.connection_pair.SetMinSize(self.FromDIP((120, -1)))
         self.connection_pair.SetName(_("Source pair"))
         self.connection_pair.SetToolTip(
             _("Select the pair whose A and B signals appear in the graph.")
@@ -218,11 +219,35 @@ class TaskPanel(wx.Panel):
             button.Bind(wx.EVT_BUTTON, self.OnConnection)
             connection_row.Add(button, 0, wx.RIGHT, 5)
         connection_box.Add(connection_row, 0, wx.EXPAND | wx.ALL, 5)
+        point_row = wx.BoxSizer(wx.HORIZONTAL)
+        point_row.Add(
+            wx.StaticText(self, label=_("Points per region:")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.min_seed_points = wx.SpinCtrl(self, min=1, max=2000, initial=5)
+        self.max_seed_points = wx.SpinCtrl(self, min=1, max=2000, initial=50)
+        for label, control in ((_("Min"), self.min_seed_points), (_("Max"), self.max_seed_points)):
+            point_row.Add(
+                wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4
+            )
+            control.SetToolTip(
+                _(
+                    "Bound the number of centers estimated from active area and radius. Stronger uncovered points have priority. "
+                    "Small patches use the available vertices; the maximum can leave parts uncovered. Detect points again after changing these limits."
+                )
+            )
+            point_row.Add(control, 1, wx.RIGHT, 5)
+        connection_box.Add(point_row, 0, wx.EXPAND | wx.ALL, 5)
         hint = wx.StaticText(
             self,
             label=_(
                 "Detect points uses smoothed activity: Min defines region boundaries, Med selects strong peaks, and Max sets saturation. "
-                "Detect again after changing the time, color limits or radius. Load FOD in Tractography; "
+                "Atlas boundaries also constrain smoothing when annotations are available. "
+                "Each active atlas parcel becomes one region, including disconnected active areas. "
+                "Point counts scale with active area and search radius, within the point limits. "
+                "Detect again after changing the time, color limits, radius or point limits. Load FOD in Tractography; "
                 "each pair's activity controls its tract opacity. "
                 "When ACT is enabled, seed positions are restricted to its white-matter label."
             ),
@@ -321,6 +346,8 @@ class TaskPanel(wx.Panel):
             bool(loaded and any(seed is not None for seed in connection.seeds))
         )
         self.connection_radius.Enable(loaded)
+        self.min_seed_points.Enable(loaded)
+        self.max_seed_points.Enable(loaded)
         choices = []
         if loaded and all(seed is not None for seed in connection.seeds):
             for pair in connection.pairs:
@@ -343,7 +370,7 @@ class TaskPanel(wx.Panel):
                 ("A", "B"), (connection.seeds[i] for i in pair) if loaded else (None, None)
             )
         ]
-        text = "   ".join(labels)
+        text = "\n".join(labels)
         if loaded and all(seed is not None for seed in connection.seeds):
             text += (
                 f"\n{len(connection.seeds)} "
@@ -373,6 +400,10 @@ class TaskPanel(wx.Panel):
                 Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
                 Publisher.sendMessage("Render volume viewer")
             elif control is self.detect_connection:
+                self._mode.series.seed_point_limits = (
+                    self.min_seed_points.GetValue(),
+                    self.max_seed_points.GetValue(),
+                )
                 self._mode.connection.detect_seeds(self.connection_radius.GetValue())
             elif control is self.connection_pair:
                 self._mode.connection.select_pair(self.connection_pair.GetSelection())
@@ -824,6 +855,7 @@ class ImportSourceDialog(wx.Dialog):
         else:
             rows.append(("curv", _("Curvature")))
             rows.append(("cortex_label", _("Cortical mask (optional)")))
+            rows.append(("parcellation", _("Cortical atlas (optional)")))
         table.SetCols(len(titles))
         parent = self.detected.GetPane()
         for title in titles:

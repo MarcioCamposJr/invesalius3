@@ -113,6 +113,9 @@ class CorticalSourceSeries:
     brainstorm_sphere: np.ndarray | None = None
     color_limits: tuple[float, float, float] | None = None
     cortex_mask: np.ndarray | None = None
+    parcellation_labels: np.ndarray | None = None
+    parcellation_names: dict[int, str] = field(default_factory=dict)
+    seed_point_limits: tuple[int, int] = (5, 50)
 
     @property
     def color_range(self):
@@ -220,9 +223,12 @@ class CorticalSourceSeries:
         return strength
 
     def detect_regions(self, values, radius):
-        """Find connected smoothed regions above Min with a peak reaching Med."""
+        """Group active vertices by atlas parcel, falling back to connected patches."""
         if not np.isfinite(radius) or radius <= 0:
             raise ValueError("A positive, finite search radius is required.")
+        minimum, maximum = (operator.index(value) for value in self.seed_point_limits)
+        if not 1 <= minimum <= maximum:
+            raise ValueError("Seed point limits must satisfy 1 <= minimum <= maximum.")
         values = np.abs(values, dtype=np.float64)
         if values.shape != (len(self.points),):
             raise ValueError("Smoothed activity must match the anatomical cortical vertices.")
@@ -230,20 +236,38 @@ class CorticalSourceSeries:
         active = strength > 0
         if self.cortex_mask is not None:
             active &= self.cortex_mask
+        if self.parcellation_labels is not None:
+            active &= self.parcellation_labels >= 0
         faces = self.triangles
-        edges = np.concatenate((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
-        hemispheres = self.read_surface(self.base_representation)[3]
-        if hemispheres is not None:
-            edges = edges[hemispheres[edges[:, 0]] == hemispheres[edges[:, 1]]]
-        edges = edges[active[edges].all(axis=1)]
-        graph = csr_matrix(
-            (np.ones(len(edges)), (edges[:, 0], edges[:, 1])),
-            shape=(len(values), len(values)),
-        )
-        _, labels = connected_components(graph, directed=False)
+        if self.parcellation_labels is not None:
+            labels = self.parcellation_labels
+        else:
+            edges = np.concatenate((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
+            hemispheres = self.read_surface(self.base_representation)[3]
+            if hemispheres is not None:
+                edges = edges[hemispheres[edges[:, 0]] == hemispheres[edges[:, 1]]]
+            edges = edges[active[edges].all(axis=1)]
+            graph = csr_matrix(
+                (np.ones(len(edges)), (edges[:, 0], edges[:, 1])),
+                shape=(len(values), len(values)),
+            )
+            _, labels = connected_components(graph, directed=False)
         candidates = np.flatnonzero(active & (strength >= 0.5) & (self.vertex_sources >= 0))
         candidates = candidates[np.argsort(-values[candidates], kind="stable")]
         points = self.anatomical_points()
+        triangle_areas = (
+            np.linalg.norm(
+                np.cross(
+                    points[faces[:, 1]] - points[faces[:, 0]],
+                    points[faces[:, 2]] - points[faces[:, 0]],
+                ),
+                axis=1,
+            )
+            / 2
+        )
+        vertex_areas = np.bincount(
+            faces.ravel(), weights=np.repeat(triangle_areas / 3, 3), minlength=len(points)
+        )
         vertices = np.flatnonzero(active)
         vertices = vertices[np.argsort(labels[vertices], kind="stable")]
         groups = np.split(vertices, np.flatnonzero(np.diff(labels[vertices])) + 1)
@@ -256,20 +280,32 @@ class CorticalSourceSeries:
             seen.add(label)
             vertices = members[label]
             coordinates = points[vertices]
+            target = min(
+                len(vertices),
+                maximum,
+                max(minimum, int(np.ceil(vertex_areas[vertices].sum() / (np.pi * radius**2)))),
+            )
             tree = cKDTree(coordinates)
             covered = np.zeros(len(vertices), dtype=bool)
             selected = []
-            for local in np.argsort(-values[vertices], kind="stable"):
+            ranking = np.argsort(-values[vertices], kind="stable")
+            for local in ranking:
                 if covered[local]:
                     continue
                 selected.append(local)
                 covered[tree.query_ball_point(coordinates[local], radius)] = True
+                if len(selected) == target:
+                    break
+            if len(selected) < target:
+                # Meet the area-based target with the strongest remaining vertices, allowing overlap.
+                remaining = ranking[~np.isin(ranking, selected)]
+                selected.extend(remaining[: target - len(selected)])
             regions.append(
                 (int(self.vertex_sources[vertex]), coordinates[selected].copy(), vertices)
             )
         if len(regions) < 2:
             raise ValueError(
-                "Fewer than two separate active regions were found. "
+                "Fewer than two active regions were found. "
                 "Review the current time, Min/Med color limits and search radius."
             )
         return regions
@@ -281,6 +317,11 @@ class CorticalSourceSeries:
                 if self.vertex_hemispheres is not None:
                     return f"{('LH', 'RH')[self.vertex_hemispheres[vertex]]} {vertex + 1}"
                 prefix = ("LH", "RH")[index] if self.has_hemispheres else "Source"
+                if self.parcellation_labels is not None:
+                    label = self.parcellation_labels[sum(self.hemisphere_sizes[:index]) + vertex]
+                    name = self.parcellation_names.get(int(label))
+                    if name:
+                        return f"{prefix} {name} ({vertex})"
                 return f"{prefix} {vertex if self.has_hemispheres else vertex + 1}"
             source_index -= len(source.vertices)
         raise IndexError("Source index is outside the source series.")
@@ -423,10 +464,19 @@ def read_source_reconstruction(config, base_dir="."):
         subject_files = mesh_metadata.get("subject_files", {})
     surface_to_project = _affine(registration @ surface_to_scanner)
     cortex_mask = _read_cortex_mask(subject_files.get("cortex_label", {}), hemisphere_sizes)
+    parcellation_labels, parcellation_names = _read_parcellation(
+        subject_files.get("parcellation", {}), hemisphere_sizes
+    )
+    if parcellation_labels is not None:
+        labeled = parcellation_labels >= 0
+        cortex_mask = labeled if cortex_mask is None else cortex_mask & labeled
+        cortex_mask.flags.writeable = False
     scalar_range, global_rms = _source_statistics(
         sources, cortex_mask[source_vertices] if cortex_mask is not None else None
     )
-    vertex_sources = _vertex_sources(points, triangles, source_vertices, cortex_mask)
+    vertex_sources = _vertex_sources(
+        points, triangles, source_vertices, cortex_mask, parcellation_labels
+    )
     registered_points = nib.affines.apply_affine(surface_to_project, points)
     if not np.isfinite(registered_points).all():
         raise ValueError("Registered source geometry must be finite.")
@@ -451,6 +501,8 @@ def read_source_reconstruction(config, base_dir="."):
         brainstorm_surface=mesh_metadata.get("brainstorm_surface"),
         brainstorm_sphere=mesh_metadata.get("brainstorm_sphere"),
         cortex_mask=cortex_mask,
+        parcellation_labels=parcellation_labels,
+        parcellation_names=parcellation_names,
     )
 
 
@@ -651,13 +703,15 @@ def _validate_source_mesh(points, triangles):
     return points.astype(float), triangles.astype(np.int64)
 
 
-def _vertex_sources(points, triangles, source_vertices, cortex_mask=None):
+def _vertex_sources(points, triangles, source_vertices, cortex_mask=None, parcellation_labels=None):
     """Assign the nearest sampled source along mesh edges, never across a sulcus."""
     if len(source_vertices) == len(points):
         result = np.empty(len(points), dtype=np.int64)
         result[source_vertices] = np.arange(len(source_vertices))
         if cortex_mask is not None:
             result[~cortex_mask] = -1
+        if parcellation_labels is not None:
+            result[parcellation_labels < 0] = -1
         return result
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
     edges = np.unique(np.sort(edges, axis=1), axis=0)
@@ -665,6 +719,12 @@ def _vertex_sources(points, triangles, source_vertices, cortex_mask=None):
     if cortex_mask is not None:
         edges = edges[cortex_mask[edges].all(axis=1)]
         allowed = cortex_mask[source_vertices]
+    if parcellation_labels is not None:
+        edges = edges[
+            (parcellation_labels[edges[:, 0]] >= 0)
+            & (parcellation_labels[edges[:, 0]] == parcellation_labels[edges[:, 1]])
+        ]
+        allowed &= parcellation_labels[source_vertices] >= 0
     result = np.full(len(points), -1, dtype=np.int64)
     if not allowed.any():
         return result
@@ -689,6 +749,7 @@ def source_smoothing(
     n_vertices,
     hemispheres=None,
     cortex_mask=None,
+    parcellation_labels=None,
 ):
     """Build ten steps of normalized source propagation along cortical mesh edges."""
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
@@ -698,6 +759,12 @@ def source_smoothing(
     if cortex_mask is not None:
         edges = edges[cortex_mask[edges].all(axis=1)]
         allowed = cortex_mask[source_vertices]
+    if parcellation_labels is not None:
+        edges = edges[
+            (parcellation_labels[edges[:, 0]] >= 0)
+            & (parcellation_labels[edges[:, 0]] == parcellation_labels[edges[:, 1]])
+        ]
+        allowed &= parcellation_labels[source_vertices] >= 0
     graph = csr_matrix(
         (np.ones(2 * len(edges)), (edges.T.ravel(), edges[:, ::-1].T.ravel())),
         shape=(n_vertices, n_vertices),
@@ -739,7 +806,9 @@ def discover_workbench_surfaces(subject_dir):
 
 def discover_freesurfer_surfaces(surface_paths):
     """Find companion surfaces alongside the selected FreeSurfer pial files."""
-    files = {kind: {} for kind in ("pial", "white", "inflated", "curv", "cortex_label")}
+    files = {
+        kind: {} for kind in ("pial", "white", "inflated", "curv", "cortex_label", "parcellation")
+    }
     for side, surface in surface_paths.items():
         surface = Path(surface)
         if surface.is_file():
@@ -752,7 +821,46 @@ def discover_freesurfer_surfaces(surface_paths):
             label = surface.parent.parent / "label" / f"{side}.cortex.label"
             if label.is_file():
                 files["cortex_label"][side] = label
+    for atlas in ("aparc.DKTatlas", "aparc"):
+        annotations = {
+            side: Path(surface).parent.parent / "label" / f"{side}.{atlas}.annot"
+            for side, surface in surface_paths.items()
+            if Path(surface).name == f"{side}.pial"
+        }
+        if set(annotations) == {"lh", "rh"} and all(
+            path.is_file() for path in annotations.values()
+        ):
+            files["parcellation"] = annotations
+            break
     return files
+
+
+def _read_parcellation(paths, hemisphere_sizes):
+    """Read a matching native surface atlas, keeping left/right region IDs distinct."""
+    if not paths:
+        return None, {}
+    if set(paths) != {"lh", "rh"} or len(hemisphere_sizes) != 2:
+        raise ValueError("Cortical parcellation requires matching left/right native annotations.")
+    labels, names = [], {}
+    offset = 0
+    for side, size in zip(("lh", "rh"), hemisphere_sizes):
+        indices, _colors, region_names = nib.freesurfer.read_annot(paths[side])
+        if indices.shape != (size,) or np.any(indices < -1) or np.any(indices >= len(region_names)):
+            raise ValueError(
+                f"The {side} parcellation does not match the native cortical vertices."
+            )
+        regions = np.full(size, -1, dtype=np.int32)
+        for index, raw_name in enumerate(region_names):
+            name = raw_name.decode("utf-8")
+            if name.lower() in ("unknown", "corpuscallosum", "medial_wall"):
+                continue
+            regions[indices == index] = offset + index
+            names[offset + index] = name
+        labels.append(regions)
+        offset += len(region_names)
+    result = np.concatenate(labels)
+    result.flags.writeable = False
+    return result, names
 
 
 def _read_cortex_mask(paths, hemisphere_sizes):

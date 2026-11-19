@@ -247,6 +247,7 @@ class SourceReconstructionMode:
                 len(surface_points),
                 hemispheres,
                 series.cortex_mask,
+                series.parcellation_labels,
             )
         points = vtkPoints()
         points.SetData(numpy_to_vtk(surface_points, deep=True))
