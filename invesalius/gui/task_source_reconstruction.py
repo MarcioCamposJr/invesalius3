@@ -223,7 +223,8 @@ class TaskPanel(wx.Panel):
             label=_(
                 "Detect points uses smoothed activity: Min defines region boundaries, Med selects strong peaks, and Max sets saturation. "
                 "Detect again after changing the time, color limits or radius. Load FOD in Tractography; "
-                "each pair's activity controls its tract opacity."
+                "each pair's activity controls its tract opacity. "
+                "When ACT is enabled, seed positions are restricted to its white-matter label."
             ),
         )
         hint.Wrap(360)

@@ -56,6 +56,45 @@ def prepare_seed_coordinates(seed_coordinates):
     return np.ascontiguousarray(seed_coordinates)
 
 
+def prepare_act_seed_filter(image):
+    """Keep ACT label 1 and its world-to-voxel transform for cortical seeds."""
+    labels = image.get_fdata()
+    affine = np.asarray(image.affine)
+    if (
+        labels.ndim != 3
+        or not np.isfinite(labels).all()
+        or not np.isin(labels, (-1, 0, 1, 2)).all()
+        or not np.any(labels == 1)
+    ):
+        raise ValueError(
+            "ACT must be a 3D Trekker label image (-1 outside, 0 CSF, 1 white matter, "
+            "2 gray matter), containing white matter."
+        )
+    if (
+        affine.shape != (4, 4)
+        or not np.isfinite(affine).all()
+        or not np.allclose(affine[3], (0, 0, 0, 1))
+        or np.linalg.matrix_rank(affine) != 4
+        or image.header.get_xyzt_units()[0] not in ("unknown", "mm")
+    ):
+        raise ValueError("ACT must have valid world coordinates in millimeters.")
+    return labels == 1, np.linalg.inv(affine)
+
+
+def white_matter_seed_mask(points, white_matter, world_to_voxel):
+    """Look up nearest ACT labels, rejecting positions outside the image."""
+    voxels = points @ world_to_voxel[:3, :3].T + world_to_voxel[:3, 3]
+    inside = (
+        np.isfinite(voxels).all(axis=1)
+        & (voxels >= -0.5).all(axis=1)
+        & (voxels < np.asarray(white_matter.shape) - 0.5).all(axis=1)
+    )
+    indices = np.floor(voxels[inside] + 0.5).astype(np.intp)
+    selected = np.zeros(len(points), dtype=bool)
+    selected[inside] = white_matter[tuple(indices.T)]
+    return selected
+
+
 def clip_region_pairs(points, tree, region_ids, radius):
     """Clip streamlines between unions of seed spheres, excluding ambiguous overlaps."""
     points = np.asarray(points, dtype=float)
@@ -129,7 +168,7 @@ def clip_between_seeds(points, seeds, radius):
     return clip_region_pairs(points, cKDTree(seeds), np.arange(2), radius).get((0, 1))
 
 
-def compute_source_connection(trekker, regions, radius, count, cancel, n_threads):
+def compute_source_connection(trekker, regions, radius, count, cancel, n_threads, act=None):
     """Track region pairs in native parallel batches, allowing 45 seconds per active pair."""
     regions = [prepare_seed_coordinates(np.atleast_2d(region)) for region in regions]
     if (
@@ -143,13 +182,14 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
         raise ValueError(
             "Select at least two valid seed regions, a positive radius and 1 to 2000 tracts per pair."
         )
+    act_filter = prepare_act_seed_filter(act) if act is not None else None
     tracks = {pair: [] for pair in combinations(range(len(regions)), 2)}
     centers = np.vstack(regions)
     region_ids = np.repeat(np.arange(len(regions)), [len(region) for region in regions])
     tree = cKDTree(centers)
     rng = np.random.default_rng()
     cursors = np.zeros(len(regions), dtype=int)
-    sampled = generated = 0
+    attempted = sampled = generated = 0
     queue = iter(tracks)
     active = {}
     parallel_pairs = max(1, n_threads // 2)
@@ -181,7 +221,14 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
                 offsets = rng.normal(size=(size, 3))
                 offsets /= np.linalg.norm(offsets, axis=1)[:, None]
                 offsets *= radius * rng.random((size, 1)) ** (1 / 3)
-                samples.append(regions[origin][indices] + offsets)
+                positions = regions[origin][indices] + offsets
+                attempted += len(positions)
+                if act_filter is not None:
+                    positions = positions[white_matter_seed_mask(positions, *act_filter)]
+                if len(positions):
+                    samples.append(positions)
+        if not samples:
+            continue
         samples = np.ascontiguousarray(np.vstack(samples))
         sampled += len(samples)
         trekker.seed_coordinates(samples)
@@ -201,6 +248,14 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
             f"Positions sampled: {sampled}. Valid streamlines returned: {generated}. "
             f"Search radius: {radius:g} mm."
         )
+        if act_filter is not None:
+            summary += f" ACT white-matter seeds: {sampled}/{attempted} sampled positions."
+            if not sampled:
+                raise ValueError(
+                    "No sampled position inside the seed spheres belonged to ACT white matter. "
+                    + summary
+                    + " Check ACT/FOD registration, seed placement and radius."
+                )
         if not generated:
             raise ValueError(
                 "Trekker did not generate any valid streamline from the seed regions. "

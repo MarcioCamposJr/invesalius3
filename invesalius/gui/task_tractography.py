@@ -17,8 +17,10 @@
 #    detalhes.
 # --------------------------------------------------------------------------
 
+import sys
 import time
 from functools import partial
+from pathlib import Path
 from threading import Event
 
 import nibabel as nb
@@ -87,6 +89,9 @@ class InnerTaskPanel(wx.Panel):
         self.affine_vtk = None
         self.trekker = None
         self.fod_filename = None
+        self.act_image = None
+        self.act_filename = None
+        self.act_enabled = False
         self._connection_running = False
         self.n_threads = 1
         self.n_tracts = const.N_TRACTS
@@ -204,6 +209,9 @@ class InnerTaskPanel(wx.Panel):
         checkACT = wx.CheckBox(self, -1, _("ACT"))
         checkACT.SetValue(False)
         checkACT.Enable(False)
+        checkACT.SetToolTip(
+            _("Apply anatomical tracking rules and restrict source seed positions to white matter.")
+        )
         checkACT.Bind(wx.EVT_CHECKBOX, partial(self.OnEnableACT, ctrl=checkACT))
         self.checkACT = checkACT
 
@@ -258,6 +266,7 @@ class InnerTaskPanel(wx.Panel):
         voxels = nb.affines.apply_affine(np.linalg.inv(fod.affine), seeds)
         if np.any(voxels < -0.5) or np.any(voxels > np.asarray(fod.shape[:3]) - 0.5):
             raise ValueError(_("The seeds are outside the FOD. Check anatomical/FOD registration."))
+        act = self.act_image if self.act_enabled else None
         if mode.representation == "inflated":
             mode.set_display(mode.series.base_representation, True, True)
         mode.playback.pause()
@@ -284,6 +293,7 @@ class InnerTaskPanel(wx.Panel):
                     self.n_tracts,
                     cancel,
                     self.n_threads,
+                    act,
                 )
                 while not future.done():
                     keep_going, _skip = dialog.Pulse()
@@ -332,7 +342,30 @@ class InnerTaskPanel(wx.Panel):
             Publisher.sendMessage("Update marker offset state", create=False)
 
     def OnEnableACT(self, evt, ctrl):
-        Publisher.sendMessage("Enable ACT", data=ctrl.GetValue())
+        try:
+            self.SetACTEnabled(ctrl.GetValue())
+        except Exception as error:
+            ctrl.SetValue(self.act_enabled)
+            with dlg.ErrorMessageBox(
+                wx.GetApp().GetTopWindow(), _("Error updating ACT"), str(error)
+            ) as dialog:
+                dialog.ShowModal()
+        Publisher.sendMessage("Enable ACT", data=self.act_enabled)
+
+    def SetACTEnabled(self, enabled):
+        if self.nav_status or self._connection_running:
+            raise ValueError(_("Stop tractography before changing ACT."))
+        if self.trekker is None or (enabled and self.act_image is None):
+            raise ValueError(_("Load FOD and ACT before enabling ACT."))
+        if enabled and not Path(self.act_filename).is_file():
+            raise ValueError(_("The ACT file is no longer available. Import it again."))
+        self.trekker.clearPathwayRules()
+        if enabled:
+            filename = self.act_filename.encode("utf-8")
+            self.trekker.pathway_stop_at_entry(filename, -1)  # outside
+            self.trekker.pathway_discard_if_ends_inside(filename, 1)  # white matter
+            self.trekker.pathway_discard_if_enters(filename, 0)  # CSF
+        self.act_enabled = enabled
 
     def UpdateNavigationStatus(self, nav_status, vis_status):
         self.nav_status = nav_status
@@ -399,6 +432,12 @@ class InnerTaskPanel(wx.Panel):
             self.trekker = trekker.result()
             self.trekker, n_threads = dti.set_trekker_parameters(self.trekker, self.trekker_cfg)
             self.n_threads = n_threads
+            self.act_image = self.act_filename = None
+            self.act_enabled = False
+            self.checkACT.SetValue(False)
+            self.checkACT.Enable(False)
+            Publisher.sendMessage("Enable ACT", data=False)
+            Publisher.sendMessage("Update ACT data", data=None)
 
             self.checktracts.Enable(True)
             self.checktracts.SetValue(True)
@@ -411,6 +450,9 @@ class InnerTaskPanel(wx.Panel):
             self.tp.running = False
 
     def OnLoadACT(self, event=None):
+        if self.nav_status or self._connection_running:
+            wx.MessageBox(_("Stop tractography before changing ACT."), _("InVesalius 3"))
+            return
         if self.trekker:
             Publisher.sendMessage("Begin busy cursor")
             filename = dlg.ShowImportOtherFilesDialog(
@@ -436,6 +478,7 @@ class InnerTaskPanel(wx.Panel):
                         ]
                         done, not_done = wait(futures, return_when=FIRST_COMPLETED)
                         self.tp.running = False
+                        futures[1].result()
 
                     t_end = time.time()
                     print(f"Elapsed time - {t_end - t_init}")
@@ -454,25 +497,44 @@ class InnerTaskPanel(wx.Panel):
                         "Update status text in GUI", label=_("Trekker ACT loaded")
                     )
                     wx.MessageBox(_("ACT Import successful"), _("InVesalius 3"))
-            except Exception:
+            except Exception as error:
                 Publisher.sendMessage(
                     "Update status text in GUI", label=_("ACT initialization failed.")
                 )
-                wx.MessageBox(_("Unable to load ACT."), _("InVesalius 3"))
+                if hasattr(self, "tp"):
+                    self.tp.running = False
+                    self.tp.Close()
+                    del self.tp
+                with dlg.ErrorMessageBox(
+                    wx.GetApp().GetTopWindow(), _("Unable to load ACT"), str(error)
+                ) as dialog:
+                    dialog.ShowModal()
 
-            Publisher.sendMessage("End busy cursor")
+            finally:
+                if hasattr(self, "tp"):
+                    self.tp.running = False
+                    self.tp.Close()
+                    del self.tp
+                Publisher.sendMessage("End busy cursor")
         else:
             wx.MessageBox(_("Load FOD image before the ACT."), _("InVesalius 3"))
 
     def ACTLoading(self, filename):
+        # Trekker 0.9 on Windows exits the process when its NIfTI reader receives gzip.
+        if sys.platform == "win32" and filename.lower().endswith(".gz"):
+            raise ValueError(
+                _(
+                    "This Trekker build requires uncompressed ACT (.nii). Uncompress it before importing."
+                )
+            )
         act_data = nb.squeeze_image(nb.load(filename))
         act_data = nb.as_closest_canonical(act_data)
         act_data.update_header()
+        dti.prepare_act_seed_filter(act_data)
         self.act_data_arr = act_data.get_fdata()
-        # ACT rules should be as follows:
-        self.trekker.pathway_stop_at_entry(filename.encode("utf-8"), -1)  # outside
-        self.trekker.pathway_discard_if_ends_inside(filename.encode("utf-8"), 1)  # wm
-        self.trekker.pathway_discard_if_enters(filename.encode("utf-8"), 0)  # csf
+        self.act_image = act_data
+        self.act_filename = filename
+        self.SetACTEnabled(True)
 
     def OnLoadParameters(self, event=None):
         import json
@@ -527,6 +589,8 @@ class InnerTaskPanel(wx.Panel):
     def OnCloseProject(self):
         self.fod_filename = None
         self.trekker = None
+        self.act_image = self.act_filename = None
+        self.act_enabled = False
         self.n_threads = 1
         self.trekker_cfg = const.TREKKER_CONFIG
 
