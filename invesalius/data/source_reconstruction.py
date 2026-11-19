@@ -112,6 +112,7 @@ class CorticalSourceSeries:
     brainstorm_surface: Path | None = None
     brainstorm_sphere: np.ndarray | None = None
     color_limits: tuple[float, float, float] | None = None
+    cortex_mask: np.ndarray | None = None
 
     @property
     def color_range(self):
@@ -227,6 +228,8 @@ class CorticalSourceSeries:
             raise ValueError("Smoothed activity must match the anatomical cortical vertices.")
         strength = self.activation_strength(values)
         active = strength > 0
+        if self.cortex_mask is not None:
+            active &= self.cortex_mask
         faces = self.triangles
         edges = np.concatenate((faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]))
         hemispheres = self.read_surface(self.base_representation)[3]
@@ -238,7 +241,7 @@ class CorticalSourceSeries:
             shape=(len(values), len(values)),
         )
         _, labels = connected_components(graph, directed=False)
-        candidates = np.flatnonzero((strength >= 0.5) & (self.vertex_sources >= 0))
+        candidates = np.flatnonzero(active & (strength >= 0.5) & (self.vertex_sources >= 0))
         candidates = candidates[np.argsort(-values[candidates], kind="stable")]
         points = self.anatomical_points()
         vertices = np.flatnonzero(active)
@@ -419,8 +422,11 @@ def read_source_reconstruction(config, base_dir="."):
         hemisphere_sizes = mesh_metadata.get("hemisphere_sizes", ())
         subject_files = mesh_metadata.get("subject_files", {})
     surface_to_project = _affine(registration @ surface_to_scanner)
-    scalar_range, global_rms = _source_statistics(sources)
-    vertex_sources = _vertex_sources(points, triangles, source_vertices)
+    cortex_mask = _read_cortex_mask(subject_files.get("cortex_label", {}), hemisphere_sizes)
+    scalar_range, global_rms = _source_statistics(
+        sources, cortex_mask[source_vertices] if cortex_mask is not None else None
+    )
+    vertex_sources = _vertex_sources(points, triangles, source_vertices, cortex_mask)
     registered_points = nib.affines.apply_affine(surface_to_project, points)
     if not np.isfinite(registered_points).all():
         raise ValueError("Registered source geometry must be finite.")
@@ -444,6 +450,7 @@ def read_source_reconstruction(config, base_dir="."):
         vertex_hemispheres=mesh_metadata.get("vertex_hemispheres"),
         brainstorm_surface=mesh_metadata.get("brainstorm_surface"),
         brainstorm_sphere=mesh_metadata.get("brainstorm_sphere"),
+        cortex_mask=cortex_mask,
     )
 
 
@@ -575,11 +582,17 @@ def _scalar_source_values(data, count, axis, config, components=1):
     return data.T
 
 
-def _source_statistics(hemispheres):
+def _source_statistics(hemispheres, source_mask=None):
     if not sum(len(source.vertices) for source in hemispheres):
         raise ValueError("The source reconstruction does not contain any sources.")
     minimum, maximum = float("inf"), float("-inf")
     rms = np.zeros(hemispheres[0].axis.n_frames, dtype=np.float64)
+    count = sum(len(source.vertices) for source in hemispheres)
+    if source_mask is not None:
+        count = int(np.count_nonzero(source_mask))
+        if not count:
+            raise ValueError("The reconstruction has no sources inside the cortical mask.")
+    offset = 0
     for stc in hemispheres:
         if not len(stc.vertices):
             continue
@@ -588,11 +601,16 @@ def _source_statistics(hemispheres):
             chunk = stc.values[start : start + frames_per_chunk]
             if not np.isfinite(chunk).all():
                 raise ValueError("Source values must be finite.")
+            if source_mask is not None:
+                chunk = chunk[:, source_mask[offset : offset + len(stc.vertices)]]
+                if not chunk.shape[1]:
+                    continue
             minimum = min(minimum, float(chunk.min()))
             maximum = max(maximum, float(chunk.max()))
             # Square in float64 to preserve tiny amplitudes and avoid float32 overflow.
             rms[start : start + len(chunk)] += np.square(chunk, dtype=np.float64).sum(axis=1)
-    rms /= sum(len(stc.vertices) for stc in hemispheres)
+        offset += len(stc.vertices)
+    rms /= count
     np.sqrt(rms, out=rms)
     rms.flags.writeable = False
     return (minimum, maximum), rms
@@ -633,35 +651,53 @@ def _validate_source_mesh(points, triangles):
     return points.astype(float), triangles.astype(np.int64)
 
 
-def _vertex_sources(points, triangles, source_vertices):
+def _vertex_sources(points, triangles, source_vertices, cortex_mask=None):
     """Assign the nearest sampled source along mesh edges, never across a sulcus."""
     if len(source_vertices) == len(points):
         result = np.empty(len(points), dtype=np.int64)
         result[source_vertices] = np.arange(len(source_vertices))
+        if cortex_mask is not None:
+            result[~cortex_mask] = -1
         return result
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
     edges = np.unique(np.sort(edges, axis=1), axis=0)
+    allowed = np.ones(len(source_vertices), dtype=bool)
+    if cortex_mask is not None:
+        edges = edges[cortex_mask[edges].all(axis=1)]
+        allowed = cortex_mask[source_vertices]
+    result = np.full(len(points), -1, dtype=np.int64)
+    if not allowed.any():
+        return result
     lengths = np.linalg.norm(points[edges[:, 0]] - points[edges[:, 1]], axis=1)
     graph = csr_matrix(
         (np.tile(lengths, 2), (edges.T.ravel(), edges[:, ::-1].T.ravel())),
         shape=(len(points), len(points)),
     )
     _, _, nearest = dijkstra(
-        graph, indices=source_vertices, min_only=True, return_predecessors=True
+        graph, indices=source_vertices[allowed], min_only=True, return_predecessors=True
     )
     rows = np.full(len(points), -1, dtype=np.int64)
-    rows[source_vertices] = np.arange(len(source_vertices))
+    rows[source_vertices[allowed]] = np.flatnonzero(allowed)
     mapped = nearest >= 0
-    result = np.full(len(points), -1, dtype=np.int64)
     result[mapped] = rows[nearest[mapped]]
     return result
 
 
-def source_smoothing(triangles, source_vertices, n_vertices, hemispheres=None):
+def source_smoothing(
+    triangles,
+    source_vertices,
+    n_vertices,
+    hemispheres=None,
+    cortex_mask=None,
+):
     """Build ten steps of normalized source propagation along cortical mesh edges."""
     edges = np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
     if hemispheres is not None:
         edges = edges[hemispheres[edges[:, 0]] == hemispheres[edges[:, 1]]]
+    allowed = np.ones(len(source_vertices), dtype=bool)
+    if cortex_mask is not None:
+        edges = edges[cortex_mask[edges].all(axis=1)]
+        allowed = cortex_mask[source_vertices]
     graph = csr_matrix(
         (np.ones(2 * len(edges)), (edges.T.ravel(), edges[:, ::-1].T.ravel())),
         shape=(n_vertices, n_vertices),
@@ -670,8 +706,8 @@ def source_smoothing(triangles, source_vertices, n_vertices, hemispheres=None):
     graph.setdiag(1.0)
     mapping = csr_matrix(
         (
-            np.ones(len(source_vertices)),
-            (source_vertices, np.arange(len(source_vertices))),
+            np.ones(np.count_nonzero(allowed)),
+            (source_vertices[allowed], np.flatnonzero(allowed)),
         ),
         shape=(n_vertices, len(source_vertices)),
     )
@@ -703,7 +739,7 @@ def discover_workbench_surfaces(subject_dir):
 
 def discover_freesurfer_surfaces(surface_paths):
     """Find companion surfaces alongside the selected FreeSurfer pial files."""
-    files = {kind: {} for kind in ("pial", "white", "inflated", "curv")}
+    files = {kind: {} for kind in ("pial", "white", "inflated", "curv", "cortex_label")}
     for side, surface in surface_paths.items():
         surface = Path(surface)
         if surface.is_file():
@@ -713,7 +749,41 @@ def discover_freesurfer_surfaces(surface_paths):
                 path = surface.with_name(f"{side}.{kind}")
                 if path.is_file():
                     files[kind][side] = path
+            label = surface.parent.parent / "label" / f"{side}.cortex.label"
+            if label.is_file():
+                files["cortex_label"][side] = label
     return files
+
+
+def _read_cortex_mask(paths, hemisphere_sizes):
+    """Read native FreeSurfer cortical vertex IDs without removing mesh points."""
+    if not paths:
+        return None
+    if len(hemisphere_sizes) != 2:
+        raise ValueError("FreeSurfer cortex labels require two native hemisphere meshes.")
+    mask = np.ones(sum(hemisphere_sizes), dtype=bool)
+    offset = 0
+    for side, size in zip(("lh", "rh"), hemisphere_sizes):
+        if side in paths:
+            with Path(paths[side]).open(encoding="utf-8") as stream:
+                stream.readline()
+                count = int(stream.readline().strip())
+                vertices = np.loadtxt(stream, usecols=0, ndmin=1)
+            if (
+                count < 1
+                or len(vertices) != count
+                or not np.isfinite(vertices).all()
+                or np.any(vertices != np.floor(vertices))
+                or np.any(vertices < 0)
+                or np.any(vertices >= size)
+                or len(np.unique(vertices)) != count
+            ):
+                raise ValueError(f"The {side} cortex label has invalid native vertex IDs.")
+            mask[offset : offset + size] = False
+            mask[offset + vertices.astype(np.int64)] = True
+        offset += size
+    mask.flags.writeable = False
+    return mask
 
 
 def discover_subject_files(subject_dir):

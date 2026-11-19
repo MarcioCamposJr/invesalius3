@@ -242,7 +242,11 @@ class SourceReconstructionMode:
         n_sources = sum(len(source.vertices) for source in series.sources)
         if not issparse(source_mapping) and n_sources < len(surface_points):
             source_mapping = source_smoothing(
-                triangles, series.source_vertices, len(surface_points), hemispheres
+                triangles,
+                series.source_vertices,
+                len(surface_points),
+                hemispheres,
+                series.cortex_mask,
             )
         points = vtkPoints()
         points.SetData(numpy_to_vtk(surface_points, deep=True))
@@ -574,6 +578,8 @@ class SourceReconstructionMode:
         else:
             mapped = mapping >= 0
             values[mapped] = frame[mapping[mapped]]
+        if self.series.cortex_mask is not None:
+            values[~self.series.cortex_mask] = np.nan
         return values
 
     def _show_frame(self):

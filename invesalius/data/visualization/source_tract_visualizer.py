@@ -52,6 +52,8 @@ class SourceTractConnection:
             raise ValueError("Select a cortical source with the cross cursor first.")
         source_index = mode.selected_source
         vertex = int(mode.series.source_vertices[source_index])
+        if mode.series.cortex_mask is not None and not mode.series.cortex_mask[vertex]:
+            raise ValueError("Select a source inside the FreeSurfer cortical mask.")
         point = mode.series.anatomical_points()[vertex]
         if len(self.seeds) > 2:
             self.clear()

@@ -823,6 +823,7 @@ class ImportSourceDialog(wx.Dialog):
             rows.insert(0, ("cortex", _("Cortex (default)")))
         else:
             rows.append(("curv", _("Curvature")))
+            rows.append(("cortex_label", _("Cortical mask (optional)")))
         table.SetCols(len(titles))
         parent = self.detected.GetPane()
         for title in titles:
