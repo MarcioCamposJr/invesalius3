@@ -19,6 +19,7 @@
 
 import wx
 import wx.lib.agw.foldpanelbar as fpb
+from wx.lib.scrolledpanel import ScrolledPanel
 
 import invesalius.constants as const
 import invesalius.gui.data_notebook as nb
@@ -266,6 +267,7 @@ class UpperTaskPanel(wx.Panel):
         image_list.Add(GetCollapsedIconBitmap())
 
         self.enable_items = []
+        self.section_windows = []
         self.overwrite = False
 
         session = ses.Session()
@@ -300,11 +302,22 @@ class UpperTaskPanel(wx.Panel):
             # style = fold_panel.GetCaptionStyle(item)
             # col = style.GetFirstColour()
 
+            if mode == const.MODE_NAVIGATOR:
+                window = ScrolledPanel(item, size=(1, 1))
+                window.SetMinSize((1, 1))
+                content_sizer = wx.BoxSizer(wx.VERTICAL)
+                content_sizer.Add(panel(window), 1, wx.EXPAND)
+                window.SetSizer(content_sizer)
+                window.SetupScrolling(scroll_x=False)
+                self.section_windows.append((item, window))
+            else:
+                window = panel(item)
+
             # Add panel to FoldPanel
             fold_panel.AddFoldPanelWindow(
                 item,
-                panel(item),
-                # Spacing= 0,
+                window,
+                spacing=0 if mode == const.MODE_NAVIGATOR else fpb.FPB_DEFAULT_SPACING,
                 leftSpacing=0,
                 rightSpacing=0,
             )
@@ -336,8 +349,31 @@ class UpperTaskPanel(wx.Panel):
         # Show the navigation panel in navigation mode; otherwise, show the imports panel
         if mode == const.MODE_NAVIGATOR:
             self.fold_panel.Expand(self.fold_panel.GetFoldPanel(1))
+            self.fold_panel.Bind(wx.EVT_SIZE, self.OnSectionLayout)
+            self.fold_panel.Bind(fpb.EVT_CAPTIONBAR, self.OnSectionLayout)
+            wx.CallAfter(self.ResizeSections)
         else:
             self.fold_panel.Expand(self.fold_panel.GetFoldPanel(0))
+
+    def OnSectionLayout(self, event):
+        event.Skip()
+        wx.CallAfter(self.ResizeSections)
+
+    def ResizeSections(self):
+        if not self:
+            return
+        height = max(
+            1,
+            self.fold_panel.GetClientSize().height
+            - sum(item.GetCaptionLength() for item, _ in self.section_windows),
+        )
+        for item, window in self.section_windows:
+            if item.IsExpanded():
+                window.SetSize((-1, height))
+                item.InvalidateBestSize()
+                item.ResizePanel()
+                window.FitInside()
+        self.fold_panel.RefreshPanelsFrom(self.section_windows[0][0])
 
     def __bind_events(self):
         session = ses.Session()
@@ -372,6 +408,8 @@ class UpperTaskPanel(wx.Panel):
         for item in self.enable_items:
             if mode != const.MODE_NAVIGATOR:
                 item.Disable()
+        if mode == const.MODE_NAVIGATOR:
+            wx.CallAfter(self.ResizeSections)
 
     def SetStateProjectOpen(self):
         session = ses.Session()

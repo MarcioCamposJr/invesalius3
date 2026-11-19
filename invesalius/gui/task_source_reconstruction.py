@@ -432,6 +432,9 @@ class TaskPanel(wx.Panel):
             text += "\n"
         if self.connection_status.GetLabel() != text:
             self.connection_status.SetLabel(text)
+            height = self.GetSizer().GetMinSize().height
+            self.SetMinSize((-1, height))
+            self.SetSize((-1, height))
             self.Layout()
 
     def _read_fiber_multiplier(self):

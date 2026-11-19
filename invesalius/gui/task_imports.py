@@ -204,9 +204,12 @@ class InnerFoldPanel(wx.Panel):
             # col = style.GetFirstColour()
 
             # Add panel to FoldPanel
+            window = panel(item)
+            if panel is source_reconstruction.TaskPanel:
+                window.Bind(wx.EVT_SIZE, self.OnContentSize)
             fold_panel.AddFoldPanelWindow(
                 item,
-                panel(item),
+                window,
                 # Spacing= 0,
                 leftSpacing=0,
                 rightSpacing=0,
@@ -248,11 +251,13 @@ class InnerFoldPanel(wx.Panel):
         self.fold_panel.Expand(self.fold_panel.GetFoldPanel(0))
         for item in self.enable_items:
             item.Disable()
+        self.ResizeFPB()
 
     def SetStateProjectOpen(self):
         self.fold_panel.Expand(self.fold_panel.GetFoldPanel(1))
         for item in self.enable_items:
             item.Enable()
+        self.ResizeFPB()
 
     def OnFoldPressCaption(self, evt):
         id = evt.GetTag().GetId()
@@ -269,19 +274,33 @@ class InnerFoldPanel(wx.Panel):
         evt.Skip()
         wx.CallAfter(self.ResizeFPB)
 
+    def OnContentSize(self, event):
+        event.Skip()
+        wx.CallAfter(self.ResizeFPB)
+
     def ResizeFPB(self):
-        sizeNeeded = self.fold_panel.GetPanelsLength(0, 0)[2]
-        offset_constant = 1.8
-        offset = 0
+        if not self:
+            return
         panels = [
             self.fold_panel.GetFoldPanel(panel) for panel in range(self.fold_panel.GetCount())
         ]
         for panel in panels:
-            if not panel.IsExpanded():
-                offset += panel.GetSize()[1]
-        sizeNeeded += int(offset * offset_constant)
-        self.fold_panel.SetMinSize((self.fold_panel.GetSize()[0], sizeNeeded))
-        self.fold_panel.SetSize((self.fold_panel.GetSize()[0], sizeNeeded))
+            panel.InvalidateBestSize()
+            panel.ResizePanel()
+        self.fold_panel.RefreshPanelsFrom(panels[0])
+        sizeNeeded = self.fold_panel.GetPanelsLength(0, 0)[2]
+        self.fold_panel.SetMinSize((1, sizeNeeded))
+        self.fold_panel.SetSize((-1, sizeNeeded))
+        window = self
+        while window is not None and not window.IsTopLevel():
+            if isinstance(window, wx.ScrolledWindow):
+                window.FitInside()
+                break
+            window.InvalidateBestSize()
+            if window.GetSizer() is not None:
+                window.SetMinSize((1, window.GetSizer().GetMinSize().height))
+                window.Layout()
+            window = window.GetParent()
 
     def OnOverwrite(self, surface_parameters):
         self.overwrite = surface_parameters["options"]["overwrite"]
@@ -289,9 +308,11 @@ class InnerFoldPanel(wx.Panel):
     def OnFoldSurface(self):
         if not self.overwrite:
             self.fold_panel.Expand(self.fold_panel.GetFoldPanel(2))
+            self.ResizeFPB()
 
     def OnFoldExport(self):
         self.fold_panel.Expand(self.fold_panel.GetFoldPanel(3))
+        self.ResizeFPB()
 
     def OnEnableState(self, state):
         if state:
