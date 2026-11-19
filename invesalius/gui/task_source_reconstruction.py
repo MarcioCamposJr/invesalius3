@@ -211,7 +211,7 @@ class TaskPanel(wx.Panel):
         self.find_connection = wx.Button(self, label=_("Find tracts"))
         self.find_connection.SetToolTip(
             _(
-                "Use Number tracts from Tractography for each region pair, searching for up to 45 seconds per pair in parallel batches."
+                "Target k times the sphere counts in A and B, rounded up and capped at Max fibers/pair. Search for up to 45 seconds per pair in parallel batches."
             )
         )
         self.clear_connection = wx.Button(self, label=_("Clear"))
@@ -240,6 +240,41 @@ class TaskPanel(wx.Panel):
             )
             point_row.Add(control, 1, wx.RIGHT, 5)
         connection_box.Add(point_row, 0, wx.EXPAND | wx.ALL, 5)
+        fiber_row = wx.BoxSizer(wx.HORIZONTAL)
+        fiber_row.Add(
+            wx.StaticText(self, label=_("Fibers: k")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.fiber_multiplier = wx.SpinCtrlDouble(self, min=0.001, max=2000, initial=2, inc=0.1)
+        self.fiber_multiplier.SetDigits(3)
+        self.fiber_multiplier.SetName(_("Fiber multiplier k"))
+        self.fiber_multiplier.SetToolTip(
+            _(
+                "Target fibers = k × spheres in A × spheres in B, rounded up and capped at Max fibers/pair. "
+                "Accepts decimals. Replaces Number tracts from Tractography for source connections. "
+                "Find tracts again after changing k to apply the new targets."
+            )
+        )
+        self.fiber_multiplier.Bind(wx.EVT_SPINCTRLDOUBLE, self.OnFiberMultiplierChanged)
+        self.fiber_multiplier.Bind(wx.EVT_TEXT, self.OnFiberMultiplierChanged)
+        fiber_row.Add(self.fiber_multiplier, 1, wx.RIGHT, 5)
+        fiber_row.Add(
+            wx.StaticText(self, label=_("Max fibers/pair:")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.max_fibers = wx.SpinCtrl(self, min=1, max=2147483647, initial=2000)
+        self.max_fibers.SetName(_("Maximum fibers per region pair"))
+        self.max_fibers.SetToolTip(
+            _("Cap each pair's target. Find tracts again to apply a changed limit to fibers.")
+        )
+        self.max_fibers.Bind(wx.EVT_SPINCTRL, self.OnFiberMultiplierChanged)
+        self.max_fibers.Bind(wx.EVT_TEXT, self.OnFiberMultiplierChanged)
+        fiber_row.Add(self.max_fibers, 1)
+        connection_box.Add(fiber_row, 0, wx.EXPAND | wx.ALL, 5)
         hint = wx.StaticText(
             self,
             label=_(
@@ -348,14 +383,18 @@ class TaskPanel(wx.Panel):
         self.connection_radius.Enable(loaded)
         self.min_seed_points.Enable(loaded)
         self.max_seed_points.Enable(loaded)
+        self.fiber_multiplier.Enable(loaded)
+        self.max_fibers.Enable(loaded)
         choices = []
+        targets = connection.targets if loaded else {}
         if loaded and all(seed is not None for seed in connection.seeds):
             for pair in connection.pairs:
                 label = " / ".join(
                     f"{i + 1}: {series.source_label(connection.seeds[i][0])}" for i in pair
                 )
+                label += " — " + _("Target") + f": {targets[pair]} " + _("fibers")
                 if pair in connection.counts:
-                    label += f" ({connection.counts[pair]} " + _("tracts") + ")"
+                    label += f" ({connection.counts[pair]} " + _("found") + ")"
                 choices.append(label)
         if self.connection_pair.GetItems() != choices:
             self.connection_pair.SetItems(choices)
@@ -373,7 +412,12 @@ class TaskPanel(wx.Panel):
         text = "\n".join(labels)
         if loaded and all(seed is not None for seed in connection.seeds):
             text += (
-                f"\n{len(connection.seeds)} "
+                "\n"
+                + _("Target")
+                + f": {targets[pair]} "
+                + _("fibers")
+                + f" (k={connection.fiber_multiplier:g})"
+                + f"\n{len(connection.seeds)} "
                 + _("regions")
                 + f", {sum(len(seed[1]) for seed in connection.seeds)} "
                 + _("points")
@@ -389,6 +433,24 @@ class TaskPanel(wx.Panel):
         if self.connection_status.GetLabel() != text:
             self.connection_status.SetLabel(text)
             self.Layout()
+
+    def _read_fiber_multiplier(self):
+        value = float(self.fiber_multiplier.GetTextValue().replace(",", "."))
+        if not np.isfinite(value) or not 0.001 <= value <= 2000:
+            raise ValueError(_("Fiber multiplier k must be between 0.001 and 2000."))
+        return value
+
+    def OnFiberMultiplierChanged(self, event):
+        event.Skip()
+        if self._mode is None or self._mode.series is None:
+            return
+        try:
+            value = self._read_fiber_multiplier()
+        except ValueError:
+            return
+        self._mode.connection.fiber_multiplier = value
+        self._mode.connection.max_fibers = self.max_fibers.GetValue()
+        self._sync_display_controls()
 
     def OnConnection(self, event):
         if self._mode is None or self._mode.series is None:
@@ -408,6 +470,8 @@ class TaskPanel(wx.Panel):
             elif control is self.connection_pair:
                 self._mode.connection.select_pair(self.connection_pair.GetSelection())
             elif control is self.find_connection:
+                self._mode.connection.fiber_multiplier = self._read_fiber_multiplier()
+                self._mode.connection.max_fibers = self.max_fibers.GetValue()
                 Publisher.sendMessage(
                     "Compute source tract connection",
                     mode=self._mode,

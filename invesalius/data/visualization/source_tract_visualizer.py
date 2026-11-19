@@ -11,7 +11,7 @@ from vtkmodules.vtkFiltersGeneral import vtkVertexGlyphFilter
 from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
 
 import invesalius.constants as const
-from invesalius.data.tractography import compute_directions, compute_tubes
+from invesalius.data.tractography import compute_directions, compute_tubes, source_pair_targets
 from invesalius.pubsub import pub as Publisher
 
 
@@ -27,9 +27,19 @@ class SourceTractConnection:
         self.counts = {}
         self.markers = []
         self.show_points = True
+        self.fiber_multiplier = 2.0
+        self.max_fibers = 2000
         self.count = 0
         self.revision = 0
         Publisher.subscribe(self.on_source_changed, "Source reconstruction changed")
+
+    @property
+    def targets(self):
+        if any(seed is None for seed in self.seeds):
+            return {}
+        return source_pair_targets(
+            [seed[1] for seed in self.seeds], self.fiber_multiplier, self.max_fibers
+        )
 
     def clear(self):
         actors = [*self.markers, *self.actors.values()]

@@ -25,6 +25,7 @@ import queue
 import threading
 import time
 from itertools import combinations
+from math import ceil, isfinite
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -168,7 +169,19 @@ def clip_between_seeds(points, seeds, radius):
     return clip_region_pairs(points, cKDTree(seeds), np.arange(2), radius).get((0, 1))
 
 
-def compute_source_connection(trekker, regions, radius, count, cancel, n_threads, act=None):
+def source_pair_targets(regions, k, maximum=2000):
+    """Allocate fibers from sphere combinations within the chosen per-pair limit."""
+    if not isfinite(k) or k <= 0:
+        raise ValueError("The fiber multiplier k must be positive and finite.")
+    if not isinstance(maximum, int | np.integer) or maximum < 1:
+        raise ValueError("Maximum fibers per pair must be a positive integer.")
+    return {
+        (i, j): ceil(min(maximum, k * len(regions[i]) * len(regions[j])))
+        for i, j in combinations(range(len(regions)), 2)
+    }
+
+
+def compute_source_connection(trekker, regions, radius, targets, cancel, n_threads, act=None):
     """Track region pairs in native parallel batches, allowing 45 seconds per active pair."""
     regions = [prepare_seed_coordinates(np.atleast_2d(region)) for region in regions]
     if (
@@ -176,14 +189,15 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
         or any(region is None for region in regions)
         or not np.isfinite(radius)
         or radius <= 0
-        or not 1 <= count <= 2000
         or n_threads < 1
     ):
-        raise ValueError(
-            "Select at least two valid seed regions, a positive radius and 1 to 2000 tracts per pair."
-        )
+        raise ValueError("Select at least two valid seed regions and a positive radius.")
+    if set(targets) != set(combinations(range(len(regions)), 2)) or any(
+        not isinstance(target, int | np.integer) or target < 1 for target in targets.values()
+    ):
+        raise ValueError("Every region pair needs a positive integer fiber target.")
     act_filter = prepare_act_seed_filter(act) if act is not None else None
-    tracks = {pair: [] for pair in combinations(range(len(regions)), 2)}
+    tracks = {pair: [] for pair in targets}
     centers = np.vstack(regions)
     region_ids = np.repeat(np.arange(len(regions)), [len(region) for region in regions])
     tree = cKDTree(centers)
@@ -200,13 +214,13 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
         active = {
             pair: deadline
             for pair, deadline in active.items()
-            if len(tracks[pair]) < count and now < deadline
+            if len(tracks[pair]) < targets[pair] and now < deadline
         }
         while len(active) < parallel_pairs:
             pair = next(queue, None)
             if pair is None:
                 break
-            if len(tracks[pair]) < count:
+            if len(tracks[pair]) < targets[pair]:
                 active[pair] = now + 45
         if not active:
             break
@@ -238,7 +252,7 @@ def compute_source_connection(trekker, regions, radius, count, cancel, n_threads
                 continue
             generated += 1
             for pair, segment in clip_region_pairs(path, tree, region_ids, radius).items():
-                if len(tracks[pair]) < count:
+                if len(tracks[pair]) < targets[pair]:
                     tracks[pair].append(segment)
     if cancel.is_set():
         return {}

@@ -257,6 +257,7 @@ class InnerTaskPanel(wx.Panel):
         if not mode.display_active or any(seed is None for seed in connection.seeds):
             raise ValueError(_("Select A and B or detect active source regions first."))
         regions = [seed[1] for seed in connection.seeds]
+        targets = connection.targets
         seeds = np.vstack(regions)
         if len(regions) == 2 and all(len(seed[2]) == 1 for seed in connection.seeds):
             dti.clip_between_seeds(seeds, seeds, radius)
@@ -290,7 +291,7 @@ class InnerTaskPanel(wx.Panel):
                     self.trekker,
                     regions,
                     radius,
-                    self.n_tracts,
+                    targets,
                     cancel,
                     self.n_threads,
                     act,
