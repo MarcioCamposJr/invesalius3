@@ -27,6 +27,8 @@ for these maps and can freeze their geometry and appearance as project data.
 from dataclasses import asdict, dataclass, field
 from math import floor, isfinite, log10
 
+import numpy as np
+from vtkmodules.util.numpy_support import vtk_to_numpy
 from vtkmodules.vtkCommonCore import vtkLookupTable
 from vtkmodules.vtkCommonDataModel import vtkPolyData
 from vtkmodules.vtkRenderingAnnotation import vtkScalarBarActor
@@ -100,6 +102,7 @@ class SurfaceMap:
     unit: str
     color_array: str = ""
     color_bar: ColorBar = field(default_factory=ColorBar)
+    opacity_array: str = ""
 
     def __post_init__(self):
         if not isinstance(self.lookup_table, (vtkLookupTable, vtkColorTransferFunction)):
@@ -124,6 +127,19 @@ class SurfaceMap:
             raise ValueError("Surface map values must match the surface points.")
         if self.color_array and values is None:
             raise ValueError("The surface map color array is missing.")
+        if self.opacity_array:
+            weights = point_data.GetArray(self.opacity_array)
+            if (
+                not self.color_array
+                or values.GetNumberOfComponents() != 4
+                or weights is None
+                or weights.GetNumberOfTuples() != self.polydata.GetNumberOfPoints()
+                or weights.GetNumberOfComponents() != 1
+            ):
+                raise ValueError("Surface opacity weights must match RGBA surface points.")
+            weights = vtk_to_numpy(weights)
+            if not np.isfinite(weights).all() or np.any((weights < 0) | (weights > 1)):
+                raise ValueError("Surface opacity weights must be finite and between 0 and 1.")
 
     def snapshot(self):
         polydata = vtkPolyData()
@@ -153,6 +169,7 @@ class SurfaceMap:
             "unit": self.unit,
             "range": list(self.scalar_range),
             "color_array": self.color_array,
+            "opacity_array": self.opacity_array,
             "lookup_table": table,
             "color_bar": asdict(self.color_bar),
         }
@@ -185,6 +202,7 @@ class SurfaceMap:
             metadata["unit"],
             metadata.get("color_array", ""),
             ColorBar(**color_bar),
+            metadata.get("opacity_array", ""),
         )
 
 
@@ -204,6 +222,7 @@ class SurfaceMapVisualizer:
         self.actors = (self.actor, self.scalar_bar)
 
     def set_map(self, surface_map):
+        self._surface_map = surface_map
         if isinstance(surface_map.lookup_table, vtkLookupTable):
             surface_map.lookup_table.SetTableRange(surface_map.scalar_range)
         self.mapper.SetInputData(surface_map.polydata)
@@ -229,6 +248,17 @@ class SurfaceMapVisualizer:
             precision = max(0, 2 - floor(log10(min(magnitudes)))) if magnitudes else 0
             self.scalar_bar.SetLabelFormat(f"%.{precision}f")
         self.scalar_bar.SetTitle(self.color_bar.title or f"{surface_map.unit}       ")
+
+    def set_opacity(self, opacity):
+        surface_map = self._surface_map
+        if surface_map.opacity_array:
+            point_data = surface_map.polydata.GetPointData()
+            weights = vtk_to_numpy(point_data.GetArray(surface_map.opacity_array))
+            colors = point_data.GetArray(surface_map.color_array)
+            vtk_to_numpy(colors)[:, 3] = np.rint(255 * (opacity + (1 - opacity) * weights))
+            colors.Modified()
+            opacity = 1.0
+        self.actor.GetProperty().SetOpacity(opacity)
 
     def show(self, visible):
         for actor in self.actors:

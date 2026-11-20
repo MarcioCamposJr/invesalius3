@@ -411,6 +411,7 @@ class SurfaceManager:
                     Publisher.sendMessage("AppendActor", actor=prop)
             visualizer.set_map(surface_map)
             visualizer.actor.GetProperty().DeepCopy(actor.GetProperty())
+            visualizer.set_opacity(1 - surface.transparency)
             visualizer.show(presentation.visible(surface))
         visible = [v for v in self.map_visualizers.values() if v.actor.GetVisibility()]
         offsets = {}

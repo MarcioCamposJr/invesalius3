@@ -283,19 +283,24 @@ class SourceReconstructionMode:
             gray_array = numpy_to_vtk(gray, deep=True)
             gray_array.SetName("CortexGray")
             polydata.GetPointData().AddArray(gray_array)
-            colors = numpy_to_vtk(
-                np.full((len(curvature), 3), const.CORTEX_COLOR, dtype=np.uint8), deep=True
-            )
-            colors.SetName("Colors")
-            polydata.GetPointData().AddArray(colors)
+        rgba = np.empty((len(surface_points), 4), dtype=np.uint8)
+        rgba[:, :3] = const.CORTEX_COLOR
+        rgba[:, 3] = 255
+        colors = numpy_to_vtk(rgba, deep=True)
+        colors.SetName("Colors")
+        polydata.GetPointData().AddArray(colors)
+        opacity = numpy_to_vtk(np.zeros(len(surface_points), dtype=np.float32), deep=True)
+        opacity.SetName("ActivationOpacity")
+        polydata.GetPointData().AddArray(opacity)
         surface_map = SurfaceMap(
             polydata,
             vtkColorTransferFunction(),
             (0.0, 1.0),
             series.name,
             series.display_unit,
-            color_array="Colors" if curvature is not None else "",
+            color_array="Colors",
             color_bar=ColorBar(position=(0.82, 0.1), compact=False),
+            opacity_array="ActivationOpacity",
         )
         self._set_map_scale(surface_map, series)
         return surface_map, source_mapping, hemispheres
@@ -344,8 +349,6 @@ class SourceReconstructionMode:
     def _update_map_colors(self, surface_map, series):
         point_data = surface_map.polydata.GetPointData()
         gray = point_data.GetArray("CortexGray")
-        if gray is None:
-            return
         scalars = point_data.GetScalars()
         display_values = vtk_to_numpy(scalars)
         values = display_values / series.display_scale[0]
@@ -359,15 +362,26 @@ class SourceReconstructionMode:
         nodes = np.empty((lut.GetSize(), 6))
         for index, node in enumerate(nodes):
             lut.GetNodeValue(index, node)
-        colors = np.column_stack(
-            [np.interp(display_values, nodes[:, 0], nodes[:, channel]) for channel in (1, 2, 3)]
-        )
         base_color = np.asarray(const.CORTEX_COLOR) / 255.0
-        colors[~np.isfinite(values)] = base_color
-        colors += (vtk_to_numpy(gray)[:, None] - base_color) * remaining[:, None]
         color_array = point_data.GetArray(surface_map.color_array)
-        vtk_to_numpy(color_array)[:] = np.rint(np.clip(colors, 0.0, 1.0) * 255)
+        rgba = vtk_to_numpy(color_array)
+        gray_values = vtk_to_numpy(gray) if gray is not None else None
+        invalid = ~np.isfinite(values)
+        for channel in range(3):
+            colors = np.interp(display_values, nodes[:, 0], nodes[:, channel + 1])
+            colors[invalid] = base_color[channel]
+            if gray_values is not None:
+                colors += (gray_values - base_color[channel]) * remaining
+            np.clip(colors, 0.0, 1.0, out=colors)
+            colors *= 255
+            np.rint(colors, out=colors)
+            rgba[:, channel] = colors
         color_array.Modified()
+        # Smoothly fade the activation edge from Min to Med, independently of cortex opacity.
+        weight = 1 - remaining
+        opacity = point_data.GetArray(surface_map.opacity_array)
+        vtk_to_numpy(opacity)[:] = weight * weight * (3 - 2 * weight)
+        opacity.Modified()
 
     def set_color_limits(self, minimum, middle, maximum):
         if self.series is None:
