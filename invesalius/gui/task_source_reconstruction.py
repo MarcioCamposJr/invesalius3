@@ -345,7 +345,7 @@ class TaskPanel(wx.Panel):
                 "When ACT is enabled, seed positions are restricted to its white-matter label."
                 " Detect all (2 ms) pairs earlier A onsets with later B episodes; green A points show its onset, purple B points show the current time. "
                 "This is temporal precedence, not proof of causality. Detect again after changing color or point limits or radius."
-                " Find tracts searches missing anatomical pairs for the whole recording. Cached fibers are reused across activation episodes."
+                " Find tracts searches missing anatomical pairs for the whole recording. Cached fibers stay faintly visible and brighten with the cortical color scale when their endpoint spheres participate in an episode."
             ),
         )
         hint.Wrap(360)

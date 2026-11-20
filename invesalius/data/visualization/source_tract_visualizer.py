@@ -4,10 +4,12 @@ from itertools import combinations
 
 import numpy as np
 import wx
-from vtkmodules.util.numpy_support import numpy_to_vtk
+from scipy.sparse import csr_matrix
+from scipy.spatial import cKDTree
+from vtkmodules.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray, vtk_to_numpy
 from vtkmodules.vtkCommonCore import vtkPoints
-from vtkmodules.vtkCommonDataModel import vtkPolyData
-from vtkmodules.vtkFiltersCore import vtkAppendPolyData
+from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
+from vtkmodules.vtkFiltersCore import vtkAppendPolyData, vtkTubeFilter
 from vtkmodules.vtkFiltersGeneral import vtkVertexGlyphFilter
 from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
 
@@ -26,7 +28,10 @@ class SourceTractConnection:
         self.search_pairs = ()
         # shortcut: session-only cache for this seed geometry; persist it if cross-session reuse is needed.
         self.track_cache = {}
+        self.track_contacts = {}
         self.render_counts = {}
+        self.render_values = {}
+        self._color_nodes = None
         self.attempted_pairs = set()
         self.cache_context = None
         self.cache_radius = None
@@ -85,7 +90,9 @@ class SourceTractConnection:
         self.counts.clear()
         self.count = 0
         self.track_cache.clear()
+        self.track_contacts.clear()
         self.render_counts.clear()
+        self.render_values.clear()
         self.attempted_pairs.clear()
         self.cache_context = self.cache_radius = None
 
@@ -111,7 +118,9 @@ class SourceTractConnection:
         self.pair_events = {}
         self.search_pairs = ()
         self.track_cache.clear()
+        self.track_contacts.clear()
         self.render_counts.clear()
+        self.render_values.clear()
         self.attempted_pairs.clear()
         self.cache_context = self.cache_radius = self._seed_geometry = None
         self.pairs = ((0, 1),)
@@ -251,52 +260,169 @@ class SourceTractConnection:
             return
         for pair, paths in tracks.items():
             self.track_cache[pair] = paths
+            contacts = []
+            for region, endpoint in zip(pair, (0, -1)):
+                centers = self.seeds[region][1]
+                if paths:
+                    hits = cKDTree(centers).query_ball_point(
+                        np.asarray([path[endpoint] for path in paths]), self.cache_radius + 1e-6
+                    )
+                    offsets = np.r_[0, np.cumsum([len(indices) for indices in hits])]
+                    indices = (
+                        np.concatenate(hits).astype(int) if offsets[-1] else np.empty(0, dtype=int)
+                    )
+                    contacts.append(
+                        csr_matrix(
+                            (np.ones(len(indices), dtype=bool), indices, offsets),
+                            shape=(len(paths), len(centers)),
+                        )
+                    )
+                else:
+                    contacts.append(csr_matrix((0, len(centers)), dtype=bool))
+            self.track_contacts[pair] = tuple(contacts)
             self.render_counts.pop(pair, None)
+            self.render_values.pop(pair, None)
         self.attempted_pairs.update(completed)
         self.counts = {pair: len(paths) for pair, paths in self.track_cache.items()}
         self.count = sum(self.counts.values())
         Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
         Publisher.sendMessage("Render volume viewer")
 
+    def _paths_actor(self, paths):
+        lengths = np.asarray([len(path) for path in paths])
+        points = vtkPoints()
+        points.SetData(numpy_to_vtk(np.vstack(paths), deep=True))
+        lines = vtkCellArray()
+        lines.SetData(
+            numpy_to_vtkIdTypeArray(np.r_[0, lengths.cumsum()].astype(np.int64), deep=True),
+            numpy_to_vtkIdTypeArray(np.arange(lengths.sum(), dtype=np.int64), deep=True),
+        )
+        data = vtkPolyData()
+        data.SetPoints(points)
+        data.SetLines(lines)
+        data.GetPointData().SetScalars(
+            numpy_to_vtk(np.zeros((lengths.sum(), 4), dtype=np.uint8), deep=True)
+        )
+        positions = []
+        for path in paths:
+            distance = np.r_[0.0, np.linalg.norm(np.diff(path, axis=0), axis=1).cumsum()]
+            positions.append(distance / distance[-1] if distance[-1] else distance)
+        for name, values in (
+            ("SourceFiberId", np.repeat(np.arange(len(paths), dtype=np.int32), lengths)),
+            ("SourceFiberPosition", np.concatenate(positions).astype(np.float32)),
+        ):
+            array = numpy_to_vtk(values, deep=True)
+            array.SetName(name)
+            data.GetFieldData().AddArray(array)
+        point_ids = numpy_to_vtk(np.arange(lengths.sum(), dtype=np.int64), deep=True)
+        point_ids.SetName("SourcePointId")
+        data.GetPointData().AddArray(point_ids)
+        tubes = vtkTubeFilter()
+        tubes.SetInputData(data)
+        tubes.SetRadius(0.5)
+        tubes.SetNumberOfSides(4)
+        tubes.Update()
+        return self._actor(tubes.GetOutput())
+
+    @staticmethod
+    def _contact_values(contacts, values, count):
+        offsets = contacts.indptr[: count + 1]
+        rows = np.repeat(np.arange(count), np.diff(offsets))
+        samples = values[contacts.indices[: offsets[-1]]]
+        magnitude = np.zeros(count)
+        np.maximum.at(magnitude, rows, np.abs(samples))
+        result = np.zeros(count)
+        selected = np.abs(samples) == magnitude[rows]
+        result[rows[selected]] = samples[selected]
+        return result
+
     def _show_cached_tracks(self, visible):
+        if not self.track_cache:
+            return
         targets = source_pair_targets(
             [seed[1] for seed in self.seeds], self.fiber_multiplier, self.max_fibers
         )
+        signals = {}
         sample = self.temporal.index_at(self.mode.playback.index)
-        strengths = {}
         for pair, (earlier, _later) in self.pair_events.items():
+            key = tuple(sorted(pair))
+            if key not in self.track_cache:
+                continue
+            count = min(len(self.track_cache[key]), targets[key])
             left, right = (
-                self.series.activation_strength(
+                self._contact_values(
+                    self.track_contacts[key][key.index(region)],
                     np.where(
                         self.temporal.point_activity[region][at],
                         self.temporal.point_values[region][at],
-                        0,
-                    )
-                ).max()
+                        0.0,
+                    ),
+                    count,
+                )
                 for region, at in ((pair[0], earlier), (pair[1], sample))
             )
-            key = tuple(sorted(pair))
-            strength = max(left, right) if min(left, right) > 0 else 0
-            strengths[key] = max(strengths.get(key, 0), strength)
+            active = (self.series.activation_strength(left) > 0) & (
+                self.series.activation_strength(right) > 0
+            )
+            # Stored paths always run from the lower region index to the higher one.
+            values = np.column_stack((left, right) if pair == key else (right, left))
+            values[~active] = 0.0
+            previous = signals.get(key, np.zeros((count, 2)))
+            stronger = np.abs(values).max(axis=1) > np.abs(previous).max(axis=1)
+            signals[key] = np.where(stronger[:, None], values, previous)
+        lookup = self.mode.surface_map.lookup_table
+        factor = self.series.display_scale[0]
+        appearance = lookup.GetMTime(), factor, self.series.color_limits, self.series.color_range
         for pair, paths in self.track_cache.items():
             count = min(len(paths), targets[pair])
             if not count:
                 continue
             if self.render_counts.get(pair) != count:
-                combined = vtkAppendPolyData()
-                for path in paths[:count]:
-                    tube = compute_tubes(path, compute_directions(path))
-                    combined.AddInputData(tube.GetOutput())
-                combined.Update()
-                actor = self._actor(combined.GetOutput())
+                actor = self._paths_actor(paths[:count])
                 if pair in self.actors:
                     Publisher.sendMessage(
                         "Remove actors " + str(const.SURFACE), actors=[self.actors[pair]]
                     )
                 self.actors[pair] = actor
                 self.render_counts[pair] = count
-            self.actors[pair].SetVisibility(visible)
-            self.actors[pair].GetProperty().SetOpacity(0.02 + 0.98 * strengths.get(pair, 0))
+                self.render_values.pop(pair, None)
+            actor = self.actors[pair]
+            actor.SetVisibility(visible)
+            actor.GetProperty().SetOpacity(1)
+            if not visible:
+                continue
+            values = signals.get(pair, np.zeros((count, 2)))
+            previous = self.render_values.get(pair)
+            if (
+                previous is not None
+                and previous[0] == appearance
+                and np.array_equal(previous[1], values)
+            ):
+                continue
+            polydata = actor.GetMapper().GetInput()
+            fiber_ids = vtk_to_numpy(polydata.GetFieldData().GetArray("SourceFiberId"))
+            position = vtk_to_numpy(polydata.GetFieldData().GetArray("SourceFiberPosition"))
+            # Color each centerline point once, then reuse it around the tube's cross-section.
+            gradient = values[fiber_ids, 0] + position * (values[:, 1] - values[:, 0])[fiber_ids]
+            if self._color_nodes is None or self._color_nodes[0] != lookup.GetMTime():
+                nodes = np.empty((lookup.GetSize(), 6))
+                for index, node in enumerate(nodes):
+                    lookup.GetNodeValue(index, node)
+                self._color_nodes = lookup.GetMTime(), nodes
+            nodes = self._color_nodes[1]
+            display_values = gradient * factor
+            rgba = np.empty((len(gradient), 4), dtype=np.uint8)
+            for channel in range(3):
+                rgba[:, channel] = np.rint(
+                    255 * np.interp(display_values, nodes[:, 0], nodes[:, channel + 1])
+                )
+            rgba[:, 3] = np.rint(255 * (0.02 + 0.98 * self.series.activation_strength(gradient)))
+            data = polydata.GetPointData()
+            ids = vtk_to_numpy(data.GetArray("SourcePointId"))
+            colors = data.GetScalars()
+            np.take(rgba, ids, axis=0, out=vtk_to_numpy(colors), mode="clip")
+            colors.Modified()
+            self.render_values[pair] = appearance, values
 
     def set_tracks(self, tracks, revision):
         if revision != self.revision or self.series is not self.mode.series:

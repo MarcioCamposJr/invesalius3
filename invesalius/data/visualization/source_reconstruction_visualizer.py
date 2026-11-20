@@ -383,9 +383,9 @@ class SourceReconstructionMode:
         self.series.color_limits = limits
         for surface_map in (*self._representation_maps.values(), self.surface_map):
             self._set_map_scale(surface_map, self.series)
+        Publisher.sendMessage("Source reconstruction changed", mode=self)
         if self.token is not None:
             self.painting.update(self.name, self.token, self.surface_map)
-        Publisher.sendMessage("Source reconstruction changed", mode=self)
 
     def set_signal_display(self, unit, display_unit, automatic_scale):
         if self.series is None:
