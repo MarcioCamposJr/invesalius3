@@ -21,6 +21,7 @@ import sys
 import time
 from functools import partial
 from pathlib import Path
+from queue import Empty, Queue
 from threading import Event
 
 import nibabel as nb
@@ -258,7 +259,11 @@ class InnerTaskPanel(wx.Panel):
             raise ValueError(_("Select A and B or detect active source regions first."))
         regions = [seed[1] for seed in connection.seeds]
         targets = connection.targets
-        seeds = np.vstack(regions)
+        if not targets:
+            raise ValueError(
+                _("No region pair is available for tractography. Review the onset delay window.")
+            )
+        seeds = np.vstack([regions[i] for i in sorted({i for pair in targets for i in pair})])
         if len(regions) == 2 and all(len(seed[2]) == 1 for seed in connection.seeds):
             dti.clip_between_seeds(seeds, seeds, radius)
         fod = nb.load(self.fod_filename)
@@ -271,6 +276,9 @@ class InnerTaskPanel(wx.Panel):
         if mode.representation == "inflated":
             mode.set_display(mode.series.base_representation, True, True)
         mode.playback.pause()
+        if connection.temporal is not None:
+            self.ComputeTemporalSourceConnection(mode, regions, radius, act)
+            return
         revision = connection.revision
         cancel = Event()
         self._connection_running = True
@@ -314,6 +322,109 @@ class InnerTaskPanel(wx.Panel):
                     Publisher.sendMessage("Remove tracts")
         finally:
             self._connection_running = False
+
+    def ComputeTemporalSourceConnection(self, mode, regions, radius, act):
+        connection = mode.connection
+        filenames = [self.fod_filename] + ([self.act_filename] if act is not None else [])
+        files = []
+        for filename in filenames:
+            path = Path(filename).resolve()
+            stat = path.stat()
+            files.append((str(path), stat.st_size, stat.st_mtime_ns))
+        context = (
+            id(self.trekker),
+            tuple(files),
+            tuple(sorted((key, repr(value)) for key, value in self.trekker_cfg.items())),
+        )
+        connection.prepare_cache(radius, context)
+        targets = {
+            pair: count
+            for pair, count in connection.targets.items()
+            if len(connection.track_cache.get(pair, ())) < count
+        }
+        if not targets:
+            connection.set_cached_tracks({}, connection.revision, ())
+            return
+        summary = connection.search_summary()
+        cached = {pair: connection.track_cache.get(pair, ()) for pair in targets}
+        reused_elsewhere = summary["available"] - sum(len(paths) for paths in cached.values())
+        revision = connection.revision
+        cancel, updates = Event(), Queue()
+        done, total, fibers = 0, len(targets), sum(len(paths) for paths in cached.values())
+        completed = ()
+        tracks = None
+        message_template = _(
+            "Pairs processed: {done}/{total}\n"
+            "Available fibers / whole-recording target: {available:,}/{target:,}\n"
+            "Search budget: 45 seconds per active pair. Cancellation keeps completed batches."
+        )
+        self._connection_running = True
+        try:
+            with (
+                wx.ProgressDialog(
+                    _("Temporal source tractography"),
+                    message_template.format(
+                        done=done,
+                        total=total,
+                        available=summary["available"],
+                        target=summary["target"],
+                    ),
+                    maximum=1000,
+                    parent=wx.GetApp().GetTopWindow(),
+                    style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME | wx.PD_AUTO_HIDE,
+                ) as dialog,
+                ThreadPoolExecutor(max_workers=1) as executor,
+            ):
+                future = executor.submit(
+                    dti.compute_source_connection,
+                    self.trekker,
+                    regions,
+                    radius,
+                    targets,
+                    cancel,
+                    self.n_threads,
+                    act,
+                    cached,
+                    lambda count, total, found, pairs: updates.put((count, total, found, pairs)),
+                )
+                while not future.done():
+                    try:
+                        while True:
+                            done, total, fibers, completed = updates.get_nowait()
+                    except Empty:
+                        pass
+                    message = message_template.format(
+                        done=done,
+                        total=total,
+                        available=reused_elsewhere + fibers,
+                        target=summary["target"],
+                    )
+                    keep_going, _skip = dialog.Update(min(999, round(1000 * done / total)), message)
+                    if not keep_going:
+                        cancel.set()
+                    try:
+                        future.result(timeout=0.05)
+                    except TimeoutError:
+                        pass
+                tracks = future.result()
+                if not cancel.is_set():
+                    dialog.Update(1000)
+        finally:
+            try:
+                while True:
+                    done, total, fibers, completed = updates.get_nowait()
+            except Empty:
+                pass
+            self._connection_running = False
+            if tracks is not None:
+                connection.set_cached_tracks(tracks, revision, completed)
+            elif done == total:
+                connection.set_cached_tracks(cached, revision, completed)
+        if any(connection.track_cache.values()):
+            self.view_tracts = False
+            self.checktracts.SetValue(False)
+            Publisher.sendMessage("Update tracts visualization", data=False)
+            Publisher.sendMessage("Remove tracts")
 
     def OnSelectNumTracts(self, evt, ctrl):
         self.n_tracts = ctrl.GetValue()

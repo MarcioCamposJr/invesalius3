@@ -244,6 +244,8 @@ class TaskPanel(wx.Panel):
         self.connection_radius.SetToolTip(
             _("Set the seed-sphere radius and spacing between distributed points in each region.")
         )
+        self.connection_radius.Bind(wx.EVT_SPINCTRLDOUBLE, self.OnSearchRadiusChanged)
+        self.connection_radius.Bind(wx.EVT_TEXT, self.OnSearchRadiusChanged)
         connection_row.Add(self.connection_radius, 1, wx.RIGHT, 5)
         self.find_connection = wx.Button(self, label=_("Find tracts"))
         self.find_connection.SetToolTip(
@@ -324,6 +326,7 @@ class TaskPanel(wx.Panel):
                 "When ACT is enabled, seed positions are restricted to its white-matter label."
                 " Detect all (2 ms) pairs earlier A onsets with later B episodes; green A points show its onset, purple B points show the current time. "
                 "This is temporal precedence, not proof of causality. Detect again after changing color or point limits or radius."
+                " Find tracts searches missing anatomical pairs for the whole recording. Cached fibers are reused across activation episodes."
             ),
         )
         hint.Wrap(360)
@@ -418,7 +421,9 @@ class TaskPanel(wx.Panel):
         for button in (self.seed_a, self.seed_b):
             button.Enable(bool(active and mode.selected_source is not None))
         self.find_connection.Enable(
-            bool(active and all(seed is not None for seed in connection.seeds) and temporal is None)
+            bool(
+                active and all(seed is not None for seed in connection.seeds) and connection.targets
+            )
         )
         self.clear_connection.Enable(
             bool(loaded and any(seed is not None for seed in connection.seeds))
@@ -441,6 +446,14 @@ class TaskPanel(wx.Panel):
                         (temporal.frames[later] - temporal.frames[earlier]) * series.axis.dt * 1000
                     )
                     label += f" ({delay:g} ms)"
+                    key = tuple(sorted(pair))
+                    label += (
+                        " — "
+                        + _("Target")
+                        + f": {targets[key]:,}; "
+                        + _("cached")
+                        + f": {min(len(connection.track_cache.get(key, ())), targets[key]):,}"
+                    )
                 else:
                     label += " — " + _("Target") + f": {targets[pair]} " + _("fibers")
                 if temporal is None and pair in connection.counts:
@@ -481,6 +494,25 @@ class TaskPanel(wx.Panel):
                 + _("active points")
                 + f"\n{len(connection.pairs)} "
                 + _("temporal pairs")
+            )
+            summary = connection.search_summary()
+            text += (
+                "\n"
+                + _("Whole recording")
+                + f": {summary['pairs']:,} "
+                + _("unique pairs")
+                + f"\n{summary['target']:,} "
+                + _("target fibers (sum of pairs)")
+                + "\n"
+                + _("Cached")
+                + f": {summary['available']:,}; "
+                + _("missing")
+                + f": {summary['missing']:,}"
+                + "\n"
+                + _("Pairs at target")
+                + f": {summary['pairs'] - summary['pending_pairs']:,}/{summary['pairs']:,}; "
+                + _("below target")
+                + f": {summary['pending_pairs']:,}"
             )
         elif loaded and all(seed is not None for seed in connection.seeds):
             text += (
@@ -525,7 +557,19 @@ class TaskPanel(wx.Panel):
             return
         self._mode.connection.fiber_multiplier = value
         self._mode.connection.max_fibers = self.max_fibers.GetValue()
-        self._sync_display_controls()
+        Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
+        Publisher.sendMessage("Render volume viewer")
+
+    def OnSearchRadiusChanged(self, event):
+        event.Skip()
+        if self._mode is None or self._mode.series is None:
+            return
+        connection = self._mode.connection
+        radius = self.connection_radius.GetValue()
+        if connection.cache_radius is not None and radius != connection.cache_radius:
+            connection.invalidate_tracks()
+        Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
+        Publisher.sendMessage("Render volume viewer")
 
     def _read_delay_limits(self):
         values = tuple(

@@ -181,7 +181,17 @@ def source_pair_targets(regions, k, maximum=2000):
     }
 
 
-def compute_source_connection(trekker, regions, radius, targets, cancel, n_threads, act=None):
+def compute_source_connection(
+    trekker,
+    regions,
+    radius,
+    targets,
+    cancel,
+    n_threads,
+    act=None,
+    cached=None,
+    progress=None,
+):
     """Track region pairs in native parallel batches, allowing 45 seconds per active pair."""
     regions = [prepare_seed_coordinates(np.atleast_2d(region)) for region in regions]
     if (
@@ -192,12 +202,29 @@ def compute_source_connection(trekker, regions, radius, targets, cancel, n_threa
         or n_threads < 1
     ):
         raise ValueError("Select at least two valid seed regions and a positive radius.")
-    if set(targets) != set(combinations(range(len(regions)), 2)) or any(
+    if not set(targets).issubset(combinations(range(len(regions)), 2)) or any(
         not isinstance(target, int | np.integer) or target < 1 for target in targets.values()
     ):
         raise ValueError("Every region pair needs a positive integer fiber target.")
+    if not targets:
+        return {}
     act_filter = prepare_act_seed_filter(act) if act is not None else None
-    tracks = {pair: [] for pair in targets}
+    tracks = {pair: list((cached or {}).get(pair, ()))[:target] for pair, target in targets.items()}
+    completed = set()
+    last_report = 0.0
+
+    def report(force=False):
+        nonlocal last_report
+        if progress is not None and (force or time.monotonic() - last_report >= 0.1):
+            last_report = time.monotonic()
+            progress(
+                len(completed),
+                len(targets),
+                sum(len(paths) for paths in tracks.values()),
+                tuple(sorted(completed)),
+            )
+
+    report(True)
     centers = np.vstack(regions)
     region_ids = np.repeat(np.arange(len(regions)), [len(region) for region in regions])
     tree = cKDTree(centers)
@@ -211,6 +238,11 @@ def compute_source_connection(trekker, regions, radius, targets, cancel, n_threa
     # Trekker 0.9 has process-global state; its native threads safely track seeds from several pairs.
     while not cancel.is_set():
         now = time.monotonic()
+        completed.update(
+            pair
+            for pair, deadline in active.items()
+            if len(tracks[pair]) >= targets[pair] or now >= deadline
+        )
         active = {
             pair: deadline
             for pair, deadline in active.items()
@@ -222,6 +254,8 @@ def compute_source_connection(trekker, regions, radius, targets, cancel, n_threa
                 break
             if len(tracks[pair]) < targets[pair]:
                 active[pair] = now + 45
+            else:
+                completed.add(pair)
         if not active:
             break
         samples = []
@@ -242,6 +276,7 @@ def compute_source_connection(trekker, regions, radius, targets, cancel, n_threa
                 if len(positions):
                     samples.append(positions)
         if not samples:
+            report()
             continue
         samples = np.ascontiguousarray(np.vstack(samples))
         sampled += len(samples)
@@ -252,10 +287,13 @@ def compute_source_connection(trekker, regions, radius, targets, cancel, n_threa
                 continue
             generated += 1
             for pair, segment in clip_region_pairs(path, tree, region_ids, radius).items():
-                if len(tracks[pair]) < targets[pair]:
+                if pair in tracks and len(tracks[pair]) < targets[pair]:
                     tracks[pair].append(segment)
+        report()
+    completed.update(pair for pair in targets if len(tracks[pair]) >= targets[pair])
+    report(True)
     if cancel.is_set():
-        return {}
+        return tracks if cached is not None else {}
     if not any(tracks.values()):
         summary = (
             f"Regions: {len(regions)}. Distributed points: {len(centers)}. "

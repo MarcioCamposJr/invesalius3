@@ -3,6 +3,7 @@
 from itertools import combinations
 
 import numpy as np
+import wx
 from vtkmodules.util.numpy_support import numpy_to_vtk
 from vtkmodules.vtkCommonCore import vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkPolyData
@@ -19,10 +20,18 @@ class SourceTractConnection:
     def __init__(self, mode):
         self.mode = mode
         self.series = None
-        self.delay_limits = (2.0, 20.0)
-        self.seeds = [None, None]
         self.temporal = None
+        self.delay_limits = (2.0, 20.0)
         self.pair_events = {}
+        self.search_pairs = ()
+        # shortcut: session-only cache for this seed geometry; persist it if cross-session reuse is needed.
+        self.track_cache = {}
+        self.render_counts = {}
+        self.attempted_pairs = set()
+        self.cache_context = None
+        self.cache_radius = None
+        self._seed_geometry = None
+        self.seeds = [None, None]
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
@@ -35,14 +44,63 @@ class SourceTractConnection:
         self.count = 0
         self.revision = 0
         Publisher.subscribe(self.on_source_changed, "Source reconstruction changed")
+        for topic in ("Update Trekker object", "Enable ACT", "Update ACT data"):
+            Publisher.subscribe(self.on_tracking_changed, topic)
 
     @property
     def targets(self):
         if any(seed is None for seed in self.seeds):
             return {}
-        return source_pair_targets(
+        targets = source_pair_targets(
             [seed[1] for seed in self.seeds], self.fiber_multiplier, self.max_fibers
         )
+        return (
+            {pair: targets[pair] for pair in self.search_pairs}
+            if self.temporal is not None
+            else targets
+        )
+
+    def search_summary(self):
+        targets = self.targets
+        available = sum(
+            min(len(self.track_cache.get(pair, ())), count) for pair, count in targets.items()
+        )
+        return {
+            "pairs": len(targets),
+            "target": sum(targets.values()),
+            "available": available,
+            "missing": sum(targets.values()) - available,
+            "pending_pairs": sum(
+                len(self.track_cache.get(pair, ())) < count for pair, count in targets.items()
+            ),
+            "attempted": len(self.attempted_pairs.intersection(targets)),
+        }
+
+    def invalidate_tracks(self):
+        Publisher.sendMessage(
+            "Remove actors " + str(const.SURFACE), actors=list(self.actors.values())
+        )
+        self.actors.clear()
+        self.counts.clear()
+        self.count = 0
+        self.track_cache.clear()
+        self.render_counts.clear()
+        self.attempted_pairs.clear()
+        self.cache_context = self.cache_radius = None
+
+    def on_tracking_changed(self, data):
+        if not wx.IsMainThread():
+            wx.CallAfter(self.on_tracking_changed, data)
+            return
+        self.invalidate_tracks()
+        self.revision += 1
+        Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
+        Publisher.sendMessage("Render volume viewer")
+
+    def prepare_cache(self, radius, context):
+        if self.cache_radius != radius or self.cache_context != context:
+            self.invalidate_tracks()
+        self.cache_radius, self.cache_context = radius, context
 
     def clear(self):
         actors = [*self.markers, *self.actors.values()]
@@ -50,6 +108,11 @@ class SourceTractConnection:
         self.seeds = [None, None]
         self.temporal = None
         self.pair_events = {}
+        self.search_pairs = ()
+        self.track_cache.clear()
+        self.render_counts.clear()
+        self.attempted_pairs.clear()
+        self.cache_context = self.cache_radius = self._seed_geometry = None
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
@@ -96,6 +159,7 @@ class SourceTractConnection:
             return
         self.temporal = result
         self.seeds = result.regions
+        self.search_pairs = result.anatomical_pairs(self.series.axis.dt, self.delay_limits)
         self._update_seeds()
 
     def update_time(self):
@@ -116,6 +180,10 @@ class SourceTractConnection:
         if not np.isfinite((minimum, maximum)).all() or not 0 < minimum <= maximum:
             raise ValueError("Onset delays must satisfy 0 < minimum <= maximum in milliseconds.")
         self.delay_limits = (minimum, maximum)
+        if self.temporal is not None:
+            self.search_pairs = self.temporal.anatomical_pairs(
+                self.series.axis.dt, self.delay_limits
+            )
         self.update_time()
         Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
         Publisher.sendMessage("Render volume viewer")
@@ -139,12 +207,10 @@ class SourceTractConnection:
         )
 
     def _update_seeds(self):
-        Publisher.sendMessage(
-            "Remove actors " + str(const.SURFACE), actors=list(self.actors.values())
-        )
-        self.actors.clear()
-        self.counts.clear()
-        self.count = 0
+        geometry = tuple(seed[1].tobytes() if seed is not None else None for seed in self.seeds)
+        if self.temporal is None or geometry != self._seed_geometry or self.cache_context is None:
+            self.invalidate_tracks()
+        self._seed_geometry = geometry
         self.pairs = tuple(combinations(range(len(self.seeds)), 2))
         self.pair_index = 0
         self.update_time()
@@ -178,6 +244,58 @@ class SourceTractConnection:
         actor.PickableOff()
         Publisher.sendMessage("AppendActor", actor=actor)
         return actor
+
+    def set_cached_tracks(self, tracks, revision, completed):
+        if revision != self.revision or self.series is not self.mode.series:
+            return
+        for pair, paths in tracks.items():
+            self.track_cache[pair] = paths
+            self.render_counts.pop(pair, None)
+        self.attempted_pairs.update(completed)
+        self.counts = {pair: len(paths) for pair, paths in self.track_cache.items()}
+        self.count = sum(self.counts.values())
+        Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
+        Publisher.sendMessage("Render volume viewer")
+
+    def _show_cached_tracks(self, visible):
+        targets = source_pair_targets(
+            [seed[1] for seed in self.seeds], self.fiber_multiplier, self.max_fibers
+        )
+        sample = self.temporal.index_at(self.mode.playback.index)
+        strengths = {}
+        for pair, (earlier, _later) in self.pair_events.items():
+            left, right = (
+                self.series.activation_strength(
+                    np.where(
+                        self.temporal.point_activity[region][at],
+                        self.temporal.point_values[region][at],
+                        0,
+                    )
+                ).max()
+                for region, at in ((pair[0], earlier), (pair[1], sample))
+            )
+            key = tuple(sorted(pair))
+            strength = max(left, right) if min(left, right) > 0 else 0
+            strengths[key] = max(strengths.get(key, 0), strength)
+        for pair, paths in self.track_cache.items():
+            count = min(len(paths), targets[pair])
+            if not count:
+                continue
+            if self.render_counts.get(pair) != count:
+                combined = vtkAppendPolyData()
+                for path in paths[:count]:
+                    tube = compute_tubes(path, compute_directions(path))
+                    combined.AddInputData(tube.GetOutput())
+                combined.Update()
+                actor = self._actor(combined.GetOutput())
+                if pair in self.actors:
+                    Publisher.sendMessage(
+                        "Remove actors " + str(const.SURFACE), actors=[self.actors[pair]]
+                    )
+                self.actors[pair] = actor
+                self.render_counts[pair] = count
+            self.actors[pair].SetVisibility(visible)
+            self.actors[pair].GetProperty().SetOpacity(0.02 + 0.98 * strengths.get(pair, 0))
 
     def set_tracks(self, tracks, revision):
         if revision != self.revision or self.series is not self.mode.series:
@@ -236,6 +354,7 @@ class SourceTractConnection:
                 marker.GetMapper().SetColorModeToDirectScalars()
                 marker.SetVisibility(visible and self.show_points and active.any())
         if self.temporal is not None:
+            self._show_cached_tracks(visible)
             return
         strength = None
         if self.actors:
