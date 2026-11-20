@@ -41,6 +41,7 @@ class SourceTractConnection:
         self.show_points = True
         self.fiber_multiplier = 2.0
         self.max_fibers = 2000
+        self.search_seconds = 45.0
         self.count = 0
         self.revision = 0
         Publisher.subscribe(self.on_source_changed, "Source reconstruction changed")

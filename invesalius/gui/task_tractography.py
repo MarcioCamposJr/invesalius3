@@ -287,8 +287,8 @@ class InnerTaskPanel(wx.Panel):
                 wx.ProgressDialog(
                     _("Source connection A–B (experimental)"),
                     _(
-                        "Finding tracts between source regions in native parallel batches. Search budget: 45 seconds per active pair.\nCancellation takes effect after the current batch finishes."
-                    ),
+                        "Finding tracts between source regions in native parallel batches. Search budget: {seconds:g} seconds per active pair.\nCancellation takes effect after the current batch finishes."
+                    ).format(seconds=connection.search_seconds),
                     parent=wx.GetApp().GetTopWindow(),
                     style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME,
                 ) as dialog,
@@ -303,6 +303,7 @@ class InnerTaskPanel(wx.Panel):
                     cancel,
                     self.n_threads,
                     act,
+                    seconds_per_pair=connection.search_seconds,
                 )
                 while not future.done():
                     keep_going, _skip = dialog.Pulse()
@@ -356,7 +357,7 @@ class InnerTaskPanel(wx.Panel):
         message_template = _(
             "Pairs processed: {done}/{total}\n"
             "Available fibers / whole-recording target: {available:,}/{target:,}\n"
-            "Search budget: 45 seconds per active pair. Cancellation keeps completed batches."
+            "Search budget: {seconds:g} seconds per active pair. Cancellation keeps completed batches."
         )
         self._connection_running = True
         try:
@@ -368,6 +369,7 @@ class InnerTaskPanel(wx.Panel):
                         total=total,
                         available=summary["available"],
                         target=summary["target"],
+                        seconds=connection.search_seconds,
                     ),
                     maximum=1000,
                     parent=wx.GetApp().GetTopWindow(),
@@ -386,6 +388,7 @@ class InnerTaskPanel(wx.Panel):
                     act,
                     cached,
                     lambda count, total, found, pairs: updates.put((count, total, found, pairs)),
+                    seconds_per_pair=connection.search_seconds,
                 )
                 while not future.done():
                     try:
@@ -398,6 +401,7 @@ class InnerTaskPanel(wx.Panel):
                         total=total,
                         available=reused_elsewhere + fibers,
                         target=summary["target"],
+                        seconds=connection.search_seconds,
                     )
                     keep_going, _skip = dialog.Update(min(999, round(1000 * done / total)), message)
                     if not keep_going:

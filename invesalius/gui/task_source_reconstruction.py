@@ -250,7 +250,7 @@ class TaskPanel(wx.Panel):
         self.find_connection = wx.Button(self, label=_("Find tracts"))
         self.find_connection.SetToolTip(
             _(
-                "Target k times the sphere counts in A and B, rounded up and capped at Max fibers/pair. Search for up to 45 seconds per pair in parallel batches."
+                "Target k times the sphere counts in A and B, rounded up and capped at Max fibers/pair. Search in parallel batches within the configured time per pair."
             )
         )
         self.clear_connection = wx.Button(self, label=_("Clear"))
@@ -258,6 +258,25 @@ class TaskPanel(wx.Panel):
             button.Bind(wx.EVT_BUTTON, self.OnConnection)
             connection_row.Add(button, 0, wx.RIGHT, 5)
         connection_box.Add(connection_row, 0, wx.EXPAND | wx.ALL, 5)
+        time_row = wx.BoxSizer(wx.HORIZONTAL)
+        time_row.Add(
+            wx.StaticText(self, label=_("Search time per pair (s):")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.search_seconds = wx.SpinCtrlDouble(self, min=0.1, max=3600, initial=45, inc=5)
+        self.search_seconds.SetDigits(1)
+        self.search_seconds.SetName(_("Tract search time per pair in seconds"))
+        self.search_seconds.SetToolTip(
+            _(
+                "Stop each pair at its fiber target or this time budget, checked between batches. Changing the time preserves cached fibers."
+            )
+        )
+        self.search_seconds.Bind(wx.EVT_SPINCTRLDOUBLE, self.OnSearchSecondsChanged)
+        self.search_seconds.Bind(wx.EVT_TEXT, self.OnSearchSecondsChanged)
+        time_row.Add(self.search_seconds, 1)
+        connection_box.Add(time_row, 0, wx.EXPAND | wx.ALL, 5)
         point_row = wx.BoxSizer(wx.HORIZONTAL)
         point_row.Add(
             wx.StaticText(self, label=_("Points per region:")),
@@ -429,6 +448,7 @@ class TaskPanel(wx.Panel):
             bool(loaded and any(seed is not None for seed in connection.seeds))
         )
         self.connection_radius.Enable(loaded)
+        self.search_seconds.Enable(loaded)
         self.min_seed_points.Enable(loaded)
         self.max_seed_points.Enable(loaded)
         self.fiber_multiplier.Enable(loaded)
@@ -571,6 +591,22 @@ class TaskPanel(wx.Panel):
         Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
         Publisher.sendMessage("Render volume viewer")
 
+    def _read_search_seconds(self):
+        value = float(self.search_seconds.GetTextValue().replace(",", "."))
+        if not np.isfinite(value) or not 0.1 <= value <= 3600:
+            raise ValueError(_("Search time per pair must be between 0.1 and 3600 seconds."))
+        return value
+
+    def OnSearchSecondsChanged(self, event):
+        event.Skip()
+        if self._mode is None or self._mode.series is None:
+            return
+        try:
+            value = self._read_search_seconds()
+        except ValueError:
+            return
+        self._mode.connection.search_seconds = value
+
     def _read_delay_limits(self):
         values = tuple(
             float(control.GetTextValue().replace(",", "."))
@@ -660,6 +696,7 @@ class TaskPanel(wx.Panel):
             elif control is self.find_connection:
                 self._mode.connection.fiber_multiplier = self._read_fiber_multiplier()
                 self._mode.connection.max_fibers = self.max_fibers.GetValue()
+                self._mode.connection.search_seconds = self._read_search_seconds()
                 Publisher.sendMessage(
                     "Compute source tract connection",
                     mode=self._mode,

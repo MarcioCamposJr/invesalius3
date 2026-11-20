@@ -191,8 +191,9 @@ def compute_source_connection(
     act=None,
     cached=None,
     progress=None,
+    seconds_per_pair=45.0,
 ):
-    """Track region pairs in native parallel batches, allowing 45 seconds per active pair."""
+    """Track region pairs in native parallel batches within the per-pair time budget."""
     regions = [prepare_seed_coordinates(np.atleast_2d(region)) for region in regions]
     if (
         len(regions) < 2
@@ -200,8 +201,12 @@ def compute_source_connection(
         or not np.isfinite(radius)
         or radius <= 0
         or n_threads < 1
+        or not isfinite(seconds_per_pair)
+        or seconds_per_pair <= 0
     ):
-        raise ValueError("Select at least two valid seed regions and a positive radius.")
+        raise ValueError(
+            "Select at least two valid seed regions, a positive radius and a positive finite time budget."
+        )
     if not set(targets).issubset(combinations(range(len(regions)), 2)) or any(
         not isinstance(target, int | np.integer) or target < 1 for target in targets.values()
     ):
@@ -253,7 +258,7 @@ def compute_source_connection(
             if pair is None:
                 break
             if len(tracks[pair]) < targets[pair]:
-                active[pair] = now + 45
+                active[pair] = now + seconds_per_pair
             else:
                 completed.add(pair)
         if not active:
@@ -318,7 +323,7 @@ def compute_source_connection(
             "Streamlines were generated, but none connected two seed regions without overlap. "
             + summary
             + " Check anatomical alignment, region locations and radius. "
-            "Each active pair is searched for up to 45 seconds, stopping between batches."
+            f"Each active pair is searched for up to {seconds_per_pair:g} seconds, stopping between batches."
         )
     return tracks
 
