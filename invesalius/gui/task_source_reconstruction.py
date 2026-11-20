@@ -24,8 +24,9 @@ as readers report them. Send display changes to the EEG/MEG painting mode throug
 pubsub and reflect its current state in the task panel.
 """
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Thread
 
 import numpy as np
@@ -187,6 +188,43 @@ class TaskPanel(wx.Panel):
         )
         self.detect_connection.Bind(wx.EVT_BUTTON, self.OnConnection)
         automatic_row.Add(self.detect_connection, 0, wx.RIGHT, 5)
+        self.detect_temporal = wx.Button(self, label=_("Detect all (2 ms)"))
+        self.detect_temporal.SetToolTip(
+            _(
+                "Sample the whole recording every 2 ms using the nearest available source frames. "
+                "Requires a cortical atlas. Reuse centers at least one search radius apart within each parcel; "
+                "the minimum point count may not fit. Points and directed onset pairs follow playback."
+            )
+        )
+        self.detect_temporal.Bind(wx.EVT_BUTTON, self.OnConnection)
+        automatic_row.Add(self.detect_temporal, 0)
+        connection_box.Add(automatic_row, 0, wx.EXPAND | wx.ALL, 5)
+        delay_row = wx.BoxSizer(wx.HORIZONTAL)
+        delay_row.Add(
+            wx.StaticText(self, label=_("Onset delay (ms):")),
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+            5,
+        )
+        self.min_onset_delay = wx.SpinCtrlDouble(self, min=0.1, max=10000, initial=2, inc=1)
+        self.max_onset_delay = wx.SpinCtrlDouble(self, min=0.1, max=10000, initial=20, inc=1)
+        for label, control in ((_("Min"), self.min_onset_delay), (_("Max"), self.max_onset_delay)):
+            delay_row.Add(
+                wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4
+            )
+            control.SetDigits(1)
+            control.SetName(label + " " + _("onset delay in milliseconds"))
+            control.SetToolTip(
+                _(
+                    "A must start before B within this delay window. The pair remains during B's episode. "
+                    "Simultaneous starts and unknown onsets at the first sample are excluded. "
+                    "Changing the window updates pairs without recalculating points."
+                )
+            )
+            control.Bind(wx.EVT_SPINCTRLDOUBLE, self.OnDelayLimitsChanged)
+            control.Bind(wx.EVT_TEXT, self.OnDelayLimitsChanged)
+            delay_row.Add(control, 1, wx.RIGHT, 5)
+        connection_box.Add(delay_row, 0, wx.EXPAND | wx.ALL, 5)
         self.connection_pair = wx.Choice(self)
         self.connection_pair.SetMinSize(self.FromDIP((120, -1)))
         self.connection_pair.SetName(_("Source pair"))
@@ -194,8 +232,7 @@ class TaskPanel(wx.Panel):
             _("Select the pair whose A and B signals appear in the graph.")
         )
         self.connection_pair.Bind(wx.EVT_CHOICE, self.OnConnection)
-        automatic_row.Add(self.connection_pair, 1, wx.EXPAND)
-        connection_box.Add(automatic_row, 0, wx.EXPAND | wx.ALL, 5)
+        connection_box.Add(self.connection_pair, 0, wx.EXPAND | wx.ALL, 5)
         connection_row = wx.BoxSizer(wx.HORIZONTAL)
         connection_row.Add(
             wx.StaticText(self, label=_("Search radius (mm):")),
@@ -285,6 +322,8 @@ class TaskPanel(wx.Panel):
                 "Detect again after changing the time, color limits, radius or point limits. Load FOD in Tractography; "
                 "each pair's activity controls its tract opacity. "
                 "When ACT is enabled, seed positions are restricted to its white-matter label."
+                " Detect all (2 ms) pairs earlier A onsets with later B episodes; green A points show its onset, purple B points show the current time. "
+                "This is temporal precedence, not proof of causality. Detect again after changing color or point limits or radius."
             ),
         )
         hint.Wrap(360)
@@ -365,6 +404,7 @@ class TaskPanel(wx.Panel):
             if label.GetLabel() != text:
                 label.SetLabel(text)
         connection = mode.connection if loaded else None
+        temporal = connection.temporal if loaded else None
         self.toggle_points.Enable(bool(active and connection.markers))
         points_label = (
             _("Hide points") if not loaded or connection.show_points else _("Show points")
@@ -372,10 +412,13 @@ class TaskPanel(wx.Panel):
         if self.toggle_points.GetLabel() != points_label:
             self.toggle_points.SetLabel(points_label)
         self.detect_connection.Enable(bool(active))
+        self.detect_temporal.Enable(bool(active and series.parcellation_labels is not None))
+        for control in (self.min_onset_delay, self.max_onset_delay):
+            control.Enable(bool(loaded and series.parcellation_labels is not None))
         for button in (self.seed_a, self.seed_b):
             button.Enable(bool(active and mode.selected_source is not None))
         self.find_connection.Enable(
-            bool(active and all(seed is not None for seed in connection.seeds))
+            bool(active and all(seed is not None for seed in connection.seeds) and temporal is None)
         )
         self.clear_connection.Enable(
             bool(loaded and any(seed is not None for seed in connection.seeds))
@@ -389,11 +432,18 @@ class TaskPanel(wx.Panel):
         targets = connection.targets if loaded else {}
         if loaded and all(seed is not None for seed in connection.seeds):
             for pair in connection.pairs:
-                label = " / ".join(
+                label = (" → " if temporal is not None else " / ").join(
                     f"{i + 1}: {series.source_label(connection.seeds[i][0])}" for i in pair
                 )
-                label += " — " + _("Target") + f": {targets[pair]} " + _("fibers")
-                if pair in connection.counts:
+                if temporal is not None:
+                    earlier, later = connection.pair_events[pair]
+                    delay = (
+                        (temporal.frames[later] - temporal.frames[earlier]) * series.axis.dt * 1000
+                    )
+                    label += f" ({delay:g} ms)"
+                else:
+                    label += " — " + _("Target") + f": {targets[pair]} " + _("fibers")
+                if temporal is None and pair in connection.counts:
                     label += f" ({connection.counts[pair]} " + _("found") + ")"
                 choices.append(label)
         if self.connection_pair.GetItems() != choices:
@@ -402,15 +452,37 @@ class TaskPanel(wx.Panel):
         selected = connection.pair_index if choices else wx.NOT_FOUND
         if self.connection_pair.GetSelection() != selected:
             self.connection_pair.SetSelection(selected)
-        pair = connection.pairs[connection.pair_index] if loaded else (0, 1)
+        pair = connection.pairs[connection.pair_index] if loaded and connection.pairs else ()
         labels = [
             f"{name}: {series.source_label(seed[0]) if seed is not None else '—'}"
             for name, seed in zip(
-                ("A", "B"), (connection.seeds[i] for i in pair) if loaded else (None, None)
+                (_("A (earlier)"), _("B (current)")) if temporal is not None else ("A", "B"),
+                (connection.seeds[i] for i in pair) if loaded else (None, None),
             )
         ]
-        text = "\n".join(labels)
-        if loaded and all(seed is not None for seed in connection.seeds):
+        text = "\n".join(labels) if labels else _("No temporal pair")
+        if temporal is not None:
+            sample = temporal.index_at(mode.playback.index)
+            if pair:
+                earlier, later = connection.pair_events[pair]
+                a_ms, b_ms = (
+                    series.axis.time_at(int(temporal.frames[i])) * 1000 for i in (earlier, later)
+                )
+                text += (
+                    f"\nA: {a_ms:.2f} ms → B: {b_ms:.2f} ms; "
+                    + _("delay")
+                    + f": {b_ms - a_ms:g} ms"
+                )
+            text += (
+                f"\n{series.axis.time_at(int(temporal.frames[sample])) * 1000:.2f} ms (2 ms)"
+                + f"\n{temporal.region_activity[sample].sum()}/{len(connection.seeds)} "
+                + _("active regions")
+                + f", {sum(activity[sample].sum() for activity in temporal.point_activity)} "
+                + _("active points")
+                + f"\n{len(connection.pairs)} "
+                + _("temporal pairs")
+            )
+        elif loaded and all(seed is not None for seed in connection.seeds):
             text += (
                 "\n"
                 + _("Target")
@@ -455,6 +527,72 @@ class TaskPanel(wx.Panel):
         self._mode.connection.max_fibers = self.max_fibers.GetValue()
         self._sync_display_controls()
 
+    def _read_delay_limits(self):
+        values = tuple(
+            float(control.GetTextValue().replace(",", "."))
+            for control in (self.min_onset_delay, self.max_onset_delay)
+        )
+        if not np.isfinite(values).all() or not 0.1 <= values[0] <= values[1] <= 10000:
+            raise ValueError(_("Onset delays must satisfy 0.1 <= Min <= Max <= 10000 ms."))
+        return values
+
+    def OnDelayLimitsChanged(self, event):
+        event.Skip()
+        if self._mode is None or self._mode.series is None:
+            return
+        try:
+            values = self._read_delay_limits()
+        except ValueError:
+            return
+        self._mode.connection.set_delay_limits(*values)
+
+    def DetectTemporalPoints(self):
+        mode = self._mode
+        series = mode.series
+        mode.connection.delay_limits = self._read_delay_limits()
+        mode.playback.pause()
+        revision = mode.connection.revision
+        cancel = Event()
+        updates = Queue()
+        with (
+            wx.ProgressDialog(
+                _("Detect cortical points across time"),
+                _("Analyzing points and region activation episodes every 2 ms..."),
+                maximum=1000,
+                parent=wx.GetApp().GetTopWindow(),
+                style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_ELAPSED_TIME | wx.PD_AUTO_HIDE,
+            ) as dialog,
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            future = executor.submit(
+                series.detect_temporal_regions,
+                lambda index: mode.read_surface_frame(index, series.base_representation),
+                self.connection_radius.GetValue(),
+                cancel,
+                lambda done, total: updates.put((done, total)),
+            )
+            done, total = 0, 1
+            while not future.done():
+                try:
+                    while True:
+                        done, total = updates.get_nowait()
+                except Empty:
+                    pass
+                keep_going, _skip = dialog.Update(round(1000 * done / total))
+                if not keep_going:
+                    cancel.set()
+                try:
+                    future.result(timeout=0.05)
+                except TimeoutError:
+                    pass
+            result = future.result()
+            if not cancel.is_set():
+                keep_going, _skip = dialog.Update(1000)
+                if not keep_going:
+                    cancel.set()
+        if not cancel.is_set() and result is not None and mode.series is series:
+            mode.connection.set_temporal_regions(result, revision)
+
     def OnConnection(self, event):
         if self._mode is None or self._mode.series is None:
             return
@@ -464,12 +602,15 @@ class TaskPanel(wx.Panel):
                 self._mode.connection.show_points = not self._mode.connection.show_points
                 Publisher.sendMessage("Source reconstruction changed", mode=self._mode)
                 Publisher.sendMessage("Render volume viewer")
-            elif control is self.detect_connection:
+            elif control in (self.detect_connection, self.detect_temporal):
                 self._mode.series.seed_point_limits = (
                     self.min_seed_points.GetValue(),
                     self.max_seed_points.GetValue(),
                 )
-                self._mode.connection.detect_seeds(self.connection_radius.GetValue())
+                if control is self.detect_temporal:
+                    self.DetectTemporalPoints()
+                else:
+                    self._mode.connection.detect_seeds(self.connection_radius.GetValue())
             elif control is self.connection_pair:
                 self._mode.connection.select_pair(self.connection_pair.GetSelection())
             elif control is self.find_connection:

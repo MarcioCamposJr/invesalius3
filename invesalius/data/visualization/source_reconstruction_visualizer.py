@@ -593,8 +593,9 @@ class SourceReconstructionMode:
         scalars.Modified()
         self._update_map_colors(self.surface_map, self.series)
         self.frame_index = self.playback.index
-        self.painting.update(self.name, self.token, self.surface_map)
+        self.connection.update_time()
         Publisher.sendMessage("Source reconstruction changed", mode=self)
+        self.painting.update(self.name, self.token, self.surface_map)
 
     def clear(self):
         self.painting.reset(self)

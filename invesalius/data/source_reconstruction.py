@@ -83,6 +83,73 @@ class SourceData:
 
 
 @dataclass
+class TemporalSourceRegions:
+    """Keep fixed anatomical centers and their activity at sampled source frames."""
+
+    frames: np.ndarray
+    regions: list
+    region_activity: np.ndarray
+    point_activity: tuple[np.ndarray, ...]
+    point_values: tuple[np.ndarray, ...] = ()
+    onsets: np.ndarray = field(init=False, repr=False)
+    episode_starts: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self):
+        # Activity already present at the recording boundary has an unknown onset.
+        previous = np.vstack(
+            (np.ones((1, self.region_activity.shape[1]), dtype=bool), self.region_activity[:-1])
+        )
+        self.onsets = self.region_activity & ~previous
+        self.episode_starts = np.maximum.accumulate(
+            np.where(self.onsets, np.arange(len(self.frames))[:, None], -1), axis=0
+        )
+
+    def index_at(self, frame_index):
+        return max(
+            0,
+            min(len(self.frames) - 1, np.searchsorted(self.frames, frame_index, side="right") - 1),
+        )
+
+    def preceding_pairs(self, sample, time_step, delay_limits):
+        """Pair each active episode with the latest eligible onset of each other region."""
+        minimum, maximum = delay_limits
+        if not np.isfinite((minimum, maximum)).all() or not 0 < minimum <= maximum:
+            raise ValueError("Onset delays must satisfy 0 < minimum <= maximum in milliseconds.")
+        pairs = {}
+        for target in np.flatnonzero(self.region_activity[sample]):
+            start = self.episode_starts[sample, target]
+            if start < 0:
+                continue
+            frame = self.frames[start]
+            first = np.searchsorted(self.frames, frame - maximum / (time_step * 1000) - 1e-9)
+            stop = min(
+                start,
+                np.searchsorted(
+                    self.frames, frame - minimum / (time_step * 1000) + 1e-9, side="right"
+                ),
+            )
+            if first >= stop:
+                continue
+            origins = np.max(
+                np.where(self.onsets[first:stop], np.arange(first, stop)[:, None], -1), axis=0
+            )
+            for origin in np.flatnonzero(origins >= 0):
+                if origin != target:
+                    pairs[int(origin), int(target)] = (int(origins[origin]), int(start))
+        return pairs
+
+    def anatomical_pairs(self, time_step, delay_limits):
+        """Deduplicate directed episodes into the anatomical pairs needed by the recording."""
+        pairs = set()
+        for sample in np.flatnonzero(self.onsets.any(axis=1)):
+            pairs.update(
+                tuple(sorted(pair))
+                for pair in self.preceding_pairs(sample, time_step, delay_limits)
+            )
+        return tuple(sorted(pairs))
+
+
+@dataclass
 class CorticalSourceSeries:
     """Combine source signals with cortical anatomy in project RAS millimeters.
 
@@ -303,12 +370,84 @@ class CorticalSourceSeries:
             regions.append(
                 (int(self.vertex_sources[vertex]), coordinates[selected].copy(), vertices)
             )
-        if len(regions) < 2:
-            raise ValueError(
-                "Fewer than two active regions were found. "
-                "Review the current time, Min/Med color limits and search radius."
-            )
         return regions
+
+    def detect_temporal_regions(self, read_frame, radius, cancel, progress):
+        """Reuse atlas-region centers across the recording, sampling every 2 ms."""
+        if self.parcellation_labels is None:
+            raise ValueError("Load a cortical atlas before detecting regions across time.")
+        if not np.isfinite(radius) or radius <= 0:
+            raise ValueError("A positive, finite search radius is required.")
+        step = max(0.002, self.axis.dt)
+        minimum, maximum = (operator.index(value) for value in self.seed_point_limits)
+        if not 1 <= minimum <= maximum:
+            raise ValueError("Seed point limits must satisfy 1 <= minimum <= maximum.")
+        times = np.arange(int(np.floor((self.axis.end - self.axis.t0) / step)) + 1) * step
+        frames = np.unique(
+            np.r_[np.floor(times / self.axis.dt + 0.5).astype(int), self.axis.n_frames - 1]
+        )
+        labels = self.parcellation_labels
+        allowed = labels >= 0
+        if self.cortex_mask is not None:
+            allowed &= self.cortex_mask
+        vertices = np.flatnonzero(allowed)
+        parcel_ids, parcel_index = np.unique(labels[vertices], return_inverse=True)
+        mapped = self.vertex_sources[vertices] >= 0
+        activity = np.zeros((len(frames), len(parcel_ids)), dtype=bool)
+        peaks = np.zeros(len(self.points))
+        total = 2 * len(frames) + 1
+        for sample, frame in enumerate(frames):
+            if cancel.is_set():
+                return None
+            values = np.abs(read_frame(int(frame)))
+            strength = self.activation_strength(values)
+            region_peaks = np.zeros(len(parcel_ids))
+            np.maximum.at(region_peaks, parcel_index[mapped], strength[vertices[mapped]])
+            activity[sample] = region_peaks >= 0.5
+            active = vertices[(strength[vertices] > 0) & activity[sample, parcel_index]]
+            peaks[active] = np.maximum(peaks[active], values[active])
+            progress(sample + 1, total)
+        regions = self.detect_regions(peaks, radius)
+        if not regions:
+            raise ValueError(
+                "No active cortical region was found. Review the Min/Med color limits."
+            )
+        points = self.anatomical_points()
+        neighbors, columns = [], []
+        for index, (source, centers, members) in enumerate(regions):
+            if cancel.is_set():
+                return None
+            kept = []
+            for center in centers:
+                if not kept or np.all(np.linalg.norm(np.asarray(kept) - center, axis=1) > radius):
+                    kept.append(center)
+            # Spacing takes priority when the requested minimum cannot fit in the active area.
+            centers = np.asarray(kept)
+            regions[index] = (source, centers, members)
+            local = cKDTree(points[members]).query_ball_point(centers, radius)
+            neighbors.append([members[indices] for indices in local])
+            columns.append(np.searchsorted(parcel_ids, labels[members[0]]))
+        region_activity = activity[:, columns]
+        point_activity = tuple(
+            np.zeros((len(frames), len(region[1])), dtype=bool) for region in regions
+        )
+        point_values = tuple(np.zeros(activity.shape) for activity in point_activity)
+        progress(len(frames) + 1, total)
+        for sample, frame in enumerate(frames):
+            if cancel.is_set():
+                return None
+            values = np.nan_to_num(read_frame(int(frame)), nan=0.0, posinf=0.0, neginf=0.0)
+            for region, neighborhoods in enumerate(neighbors):
+                if region_activity[sample, region]:
+                    point_values[region][sample] = [
+                        values[indices[np.argmax(np.abs(values[indices]))]] if len(indices) else 0.0
+                        for indices in neighborhoods
+                    ]
+                    point_activity[region][sample] = (
+                        self.activation_strength(point_values[region][sample]) > 0
+                    )
+            progress(len(frames) + 2 + sample, total)
+        return TemporalSourceRegions(frames, regions, region_activity, point_activity, point_values)
 
     def source_label(self, source_index):
         for index, source in enumerate(self.sources):

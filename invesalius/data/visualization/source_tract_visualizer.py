@@ -19,7 +19,10 @@ class SourceTractConnection:
     def __init__(self, mode):
         self.mode = mode
         self.series = None
+        self.delay_limits = (2.0, 20.0)
         self.seeds = [None, None]
+        self.temporal = None
+        self.pair_events = {}
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
@@ -45,6 +48,8 @@ class SourceTractConnection:
         actors = [*self.markers, *self.actors.values()]
         Publisher.sendMessage("Remove actors " + str(const.SURFACE), actors=actors)
         self.seeds = [None, None]
+        self.temporal = None
+        self.pair_events = {}
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
@@ -65,7 +70,7 @@ class SourceTractConnection:
         if mode.series.cortex_mask is not None and not mode.series.cortex_mask[vertex]:
             raise ValueError("Select a source inside the FreeSurfer cortical mask.")
         point = mode.series.anatomical_points()[vertex]
-        if len(self.seeds) > 2:
+        if self.temporal is not None or len(self.seeds) > 2:
             self.clear()
         self.seeds[index] = (source_index, point[None].copy(), np.array([vertex]))
         self._update_seeds()
@@ -75,9 +80,45 @@ class SourceTractConnection:
             self.mode.playback.index, self.mode.series.base_representation
         )
         regions = self.mode.series.detect_regions(values, radius)
+        if len(regions) < 2:
+            raise ValueError(
+                "Fewer than two active regions were found. "
+                "Review the current time, Min/Med color limits and search radius."
+            )
         self.mode.playback.pause()
+        self.temporal = None
+        self.pair_events = {}
         self.seeds = regions
         self._update_seeds()
+
+    def set_temporal_regions(self, result, revision):
+        if revision != self.revision or self.series is not self.mode.series:
+            return
+        self.temporal = result
+        self.seeds = result.regions
+        self._update_seeds()
+
+    def update_time(self):
+        if self.temporal is None:
+            return
+        sample = self.temporal.index_at(self.mode.playback.index)
+        self.pair_events = self.temporal.preceding_pairs(
+            sample, self.series.axis.dt, self.delay_limits
+        )
+        pairs = tuple(sorted(self.pair_events))
+        selected = self.pairs[self.pair_index] if self.pairs else None
+        if pairs != self.pairs:
+            self.pairs = pairs
+            self.pair_index = pairs.index(selected) if selected in pairs else 0
+            self._update_traces()
+
+    def set_delay_limits(self, minimum, maximum):
+        if not np.isfinite((minimum, maximum)).all() or not 0 < minimum <= maximum:
+            raise ValueError("Onset delays must satisfy 0 < minimum <= maximum in milliseconds.")
+        self.delay_limits = (minimum, maximum)
+        self.update_time()
+        Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
+        Publisher.sendMessage("Render volume viewer")
 
     def select_pair(self, index):
         if not 0 <= index < len(self.pairs):
@@ -85,8 +126,12 @@ class SourceTractConnection:
         self.pair_index = index
         self._update_traces()
         Publisher.sendMessage("Source reconstruction changed", mode=self.mode)
+        Publisher.sendMessage("Render volume viewer")
 
     def _update_traces(self):
+        if not self.pairs:
+            self.traces = ()
+            return
         self.traces = tuple(
             (f"{name}: {self.series.source_label(seed[0])}", self.series.read_source(seed[0]))
             for name, seed in zip(("A", "B"), (self.seeds[i] for i in self.pairs[self.pair_index]))
@@ -102,6 +147,7 @@ class SourceTractConnection:
         self.count = 0
         self.pairs = tuple(combinations(range(len(self.seeds)), 2))
         self.pair_index = 0
+        self.update_time()
         self._update_traces()
         self.revision += 1
         Publisher.sendMessage("Remove actors " + str(const.SURFACE), actors=self.markers)
@@ -170,12 +216,27 @@ class SourceTractConnection:
             self.clear()
             self.series = mode.series
         visible = mode.display_active and mode.representation != "inflated"
-        selected = self.pairs[self.pair_index]
-        colors = {selected[0]: (0.4, 1.0, 0.4), selected[1]: (0.9, 0.4, 1.0)}
+        selected = self.pairs[self.pair_index] if self.pairs else ()
+        colors = dict(zip(selected, ((0.4, 1.0, 0.4), (0.9, 0.4, 1.0))))
         indices = [i for i, seed in enumerate(self.seeds) if seed is not None]
         for index, marker in zip(indices, self.markers):
             marker.SetVisibility(visible and self.show_points)
             marker.GetProperty().SetColor(colors.get(index, (0.6, 0.6, 0.6)))
+            if self.temporal is not None:
+                sample = self.temporal.index_at(mode.playback.index)
+                if selected and index == selected[0]:
+                    sample = self.pair_events[selected][0]
+                active = self.temporal.point_activity[index][sample]
+                rgba = np.empty((len(active), 4), dtype=np.uint8)
+                rgba[:, :3] = np.asarray(colors.get(index, (0.6, 0.6, 0.6))) * 255
+                rgba[:, 3] = active * 255
+                marker.GetMapper().GetInput().GetPointData().SetScalars(
+                    numpy_to_vtk(rgba, deep=True)
+                )
+                marker.GetMapper().SetColorModeToDirectScalars()
+                marker.SetVisibility(visible and self.show_points and active.any())
+        if self.temporal is not None:
+            return
         strength = None
         if self.actors:
             frame = mode.read_surface_frame(mode.playback.index, mode.series.base_representation)
