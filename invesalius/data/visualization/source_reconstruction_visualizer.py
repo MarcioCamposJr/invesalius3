@@ -566,6 +566,9 @@ class SourceReconstructionMode:
         frame_index = self.playback.tick()
         if frame_index != self.frame_index:
             self._show_frame()
+        elif not self.playback.playing:
+            self.connection.update_time()
+            Publisher.sendMessage("Source reconstruction changed", mode=self)
         return frame_index
 
     def read_surface_frame(self, frame_index, representation):
@@ -594,7 +597,13 @@ class SourceReconstructionMode:
         self._update_map_colors(self.surface_map, self.series)
         self.frame_index = self.playback.index
         self.connection.update_time()
-        Publisher.sendMessage("Source reconstruction changed", mode=self)
+        # Playback updates the scene; pair lists and signal curves refresh when paused.
+        topic = (
+            "Source reconstruction frame changed"
+            if self.playback.playing
+            else "Source reconstruction changed"
+        )
+        Publisher.sendMessage(topic, mode=self)
         self.painting.update(self.name, self.token, self.surface_map)
 
     def clear(self):

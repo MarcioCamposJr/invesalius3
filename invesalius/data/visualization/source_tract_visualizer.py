@@ -40,6 +40,7 @@ class SourceTractConnection:
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
+        self._trace_sources = ()
         self.actors = {}
         self.counts = {}
         self.markers = []
@@ -50,6 +51,7 @@ class SourceTractConnection:
         self.count = 0
         self.revision = 0
         Publisher.subscribe(self.on_source_changed, "Source reconstruction changed")
+        Publisher.subscribe(self.on_source_changed, "Source reconstruction frame changed")
         for topic in ("Update Trekker object", "Enable ACT", "Update ACT data"):
             Publisher.subscribe(self.on_tracking_changed, topic)
 
@@ -126,6 +128,7 @@ class SourceTractConnection:
         self.pairs = ((0, 1),)
         self.pair_index = 0
         self.traces = ()
+        self._trace_sources = ()
         self.actors = {}
         self.counts = {}
         self.markers = []
@@ -184,6 +187,7 @@ class SourceTractConnection:
         if pairs != self.pairs:
             self.pairs = pairs
             self.pair_index = pairs.index(selected) if selected in pairs else 0
+        if not self.mode.playback.playing:
             self._update_traces()
 
     def set_delay_limits(self, minimum, maximum):
@@ -207,13 +211,21 @@ class SourceTractConnection:
         Publisher.sendMessage("Render volume viewer")
 
     def _update_traces(self):
-        if not self.pairs:
-            self.traces = ()
+        sources = (
+            tuple(
+                (name, self.seeds[i][0])
+                for name, i in zip(("A", "B"), self.pairs[self.pair_index])
+                if self.seeds[i] is not None
+            )
+            if self.pairs
+            else ()
+        )
+        if sources == self._trace_sources:
             return
+        self._trace_sources = sources
         self.traces = tuple(
-            (f"{name}: {self.series.source_label(seed[0])}", self.series.read_source(seed[0]))
-            for name, seed in zip(("A", "B"), (self.seeds[i] for i in self.pairs[self.pair_index]))
-            if seed is not None
+            (f"{name}: {self.series.source_label(source)}", self.series.read_source(source))
+            for name, source in sources
         )
 
     def _update_seeds(self):

@@ -354,6 +354,7 @@ class TaskPanel(wx.Panel):
         self.SetSizerAndFit(sizer)
         self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
         Publisher.subscribe(self.OnSourceChanged, "Source reconstruction changed")
+        Publisher.subscribe(self.OnSourceFrame, "Source reconstruction frame changed")
         Publisher.subscribe(self.OnCloseProject, "Close project data")
         self._import_settings = {}
         self._mode = SurfacePainting().modes.get("EEG/MEG")
@@ -369,6 +370,14 @@ class TaskPanel(wx.Panel):
     def OnSourceChanged(self, mode):
         self._mode = mode
         self._sync_display_controls()
+
+    def OnSourceFrame(self, mode):
+        if (
+            mode is self._mode
+            and mode.connection.temporal is not None
+            and self.connection_pair.IsEnabled()
+        ):
+            self.connection_pair.Disable()
 
     def _sync_display_controls(self):
         mode = self._mode
@@ -481,7 +490,9 @@ class TaskPanel(wx.Panel):
                 choices.append(label)
         if self.connection_pair.GetItems() != choices:
             self.connection_pair.SetItems(choices)
-        self.connection_pair.Enable(bool(active and choices))
+        self.connection_pair.Enable(
+            bool(active and choices and not (temporal is not None and mode.playback.playing))
+        )
         selected = connection.pair_index if choices else wx.NOT_FOUND
         if self.connection_pair.GetSelection() != selected:
             self.connection_pair.SetSelection(selected)
@@ -557,9 +568,10 @@ class TaskPanel(wx.Panel):
         if self.connection_status.GetLabel() != text:
             self.connection_status.SetLabel(text)
             height = self.GetSizer().GetMinSize().height
-            self.SetMinSize((-1, height))
-            self.SetSize((-1, height))
-            self.Layout()
+            if self.GetMinSize().height != height:
+                self.SetMinSize((-1, height))
+                self.SetSize((-1, height))
+                self.Layout()
 
     def _read_fiber_multiplier(self):
         value = float(self.fiber_multiplier.GetTextValue().replace(",", "."))
